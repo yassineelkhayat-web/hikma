@@ -4,9 +4,9 @@ import pandas as pd
 from datetime import date, datetime
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Suivi Coran - Admin Total", layout="wide")
+st.set_page_config(page_title="Suivi Coran - Rôles Strictes", layout="wide")
 
-# --- DONNÉES SOURATES ---
+# --- DONNÉES SOURATES (114) ---
 DATA_CORAN = {
     "Al-Fatiha": (1, 1), "Al-Baqara": (2, 49), "Al-Imran": (50, 76), "An-Nisa": (77, 106),
     "Al-Maida": (106, 127), "Al-Anam": (128, 150), "Al-Araf": (151, 176), "Al-Anfal": (177, 186),
@@ -52,12 +52,12 @@ def init_db():
 
 init_db()
 
-if 'logged_in' not in st.session_state:
-    st.session_state.update({'logged_in': False, 'user': None, 'role': None, 'user_id': None, 'page': "Accueil"})
-
 # --- AUTH ---
+if 'logged_in' not in st.session_state:
+    st.session_state.update({'logged_in': False, 'user': None, 'role': None, 'user_id': None})
+
 if not st.session_state['logged_in']:
-    st.title("📖 Suivi Coran Collectif")
+    st.title("📖 Suivi Coran")
     t1, t2 = st.tabs(["Connexion", "S'inscrire"])
     with t1:
         u = st.text_input("Pseudo")
@@ -75,20 +75,32 @@ if not st.session_state['logged_in']:
             try:
                 conn = get_connection()
                 conn.execute("INSERT INTO users (username, password, role, page_actuelle, sourate) VALUES (?,?,'membre',604, 'An-Nas')", (nu, np))
-                conn.commit(); st.success("Compte prêt !")
-            except: st.error("Pseudo déjà pris.")
+                conn.commit(); st.success("Prêt !")
+            except: st.error("Pseudo pris")
 else:
-    # Sidebar
+    # --- LOGIQUE DE NAVIGATION STRICTE ---
     st.sidebar.title(f"👤 {st.session_state['user']}")
-    if st.sidebar.button("🏠 Mon Suivi", use_container_width=True): st.session_state['page'] = "Accueil"
+    st.sidebar.write(f"Grade : **{st.session_state['role'].capitalize()}**")
+
+    # Déterminer la page selon le rôle
     if st.session_state['role'] == 'admin':
-        if st.sidebar.button("⚙️ Administration", use_container_width=True): st.session_state['page'] = "Paramètres"
+        page = "Administration"
+        st.sidebar.info("🔧 Mode Administrateur")
+    else:
+        page = "Mon Suivi"
+        st.sidebar.info("📚 Mode Lecteur")
+
     st.sidebar.divider()
-    if st.sidebar.button("🚪 Déconnexion", use_container_width=True): st.session_state.clear(); st.rerun()
+    if st.sidebar.button("🚪 Déconnexion", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
 
     conn = get_connection()
 
-    if st.session_state['page'] == "Accueil":
+    # --- AFFICHAGE SELON LE RÔLE ---
+    
+    # 1. INTERFACE MEMBRE
+    if page == "Mon Suivi":
         st.title("🚀 Ma Progression")
         row = conn.execute("SELECT page_actuelle, sourate, obj_hizb, date_cible, pages_par_semaine_fixe FROM users WHERE id=?", (st.session_state['user_id'],)).fetchone()
         
@@ -128,45 +140,53 @@ else:
                          (st.session_state['user'], str(date.today()), page_finale, choix_s))
             conn.commit(); st.rerun()
 
-    elif st.session_state['page'] == "Paramètres":
-        st.title("🛠️ Gestion des membres")
+    # 2. INTERFACE ADMIN
+    elif page == "Administration":
+        st.title("🛠️ Panneau d'Administration")
+        st.write("Gestion des membres et de leurs objectifs.")
+        
         all_u = pd.read_sql_query("SELECT * FROM users", conn)
         
         for _, u_row in all_u.iterrows():
-            if u_row['id'] == st.session_state['user_id']: continue
-            
-            with st.expander(f"👤 {u_row['username']} ({u_row['role']})"):
-                with st.form(f"f_{u_row['id']}"):
-                    st.write("**Modifier Progression & Objectifs**")
-                    col1, col2 = st.columns(2)
-                    # Modification Page/Sourate
-                    adm_s = col1.selectbox("Sourate", list(DATA_CORAN.keys()), index=list(DATA_CORAN.keys()).index(u_row['sourate']) if u_row['sourate'] in DATA_CORAN else 0, key=f"s{u_row['id']}")
-                    adm_p = col2.number_input("Page Coran", value=int(u_row['page_actuelle']), key=f"p{u_row['id']}")
-                    # Modification Objectifs
-                    adm_h = col1.number_input("Hizb Cible", value=int(u_row['obj_hizb'] or 0), key=f"h{u_row['id']}")
-                    adm_sem = col2.number_input("Pages/Semaine", value=float(u_row['pages_par_semaine_fixe'] or 0.0), key=f"sem{u_row['id']}")
-                    adm_d = st.date_input("Date Cible", value=datetime.strptime(u_row['date_cible'], '%Y-%m-%d').date() if u_row['date_cible'] else date.today(), key=f"d{u_row['id']}")
+            # L'admin peut se voir lui-même dans la liste s'il veut s'éditer, 
+            # mais il n'a pas son propre dashboard simplifié.
+            with st.expander(f"👤 {u_row['username']} - Rôle: {u_row['role']}"):
+                with st.form(f"admin_form_{u_row['id']}"):
+                    c1, c2 = st.columns(2)
+                    a_s = c1.selectbox("Sourate actuelle", list(DATA_CORAN.keys()), 
+                                       index=list(DATA_CORAN.keys()).index(u_row['sourate']) if u_row['sourate'] in DATA_CORAN else 0, key=f"s_{u_row['id']}")
+                    a_p = c2.number_input("Page précise Coran", value=int(u_row['page_actuelle']), key=f"p_{u_row['id']}")
                     
-                    if st.form_submit_button("✅ Appliquer les modifications"):
+                    a_h = c1.number_input("Hizb Cible", value=int(u_row['obj_hizb'] or 0), key=f"h_{u_row['id']}")
+                    a_sem = c2.number_input("Pages/Semaine", value=float(u_row['pages_par_semaine_fixe'] or 0.0), key=f"sem_{u_row['id']}")
+                    
+                    current_date = date.today()
+                    if u_row['date_cible']:
+                        try: current_date = datetime.strptime(u_row['date_cible'], '%Y-%m-%d').date()
+                        except: pass
+                    a_d = st.date_input("Date Limite", value=current_date, key=f"d_{u_row['id']}")
+                    
+                    if st.form_submit_button("Mettre à jour ce membre"):
                         conn.execute("UPDATE users SET page_actuelle=?, sourate=?, obj_hizb=?, pages_par_semaine_fixe=?, date_cible=? WHERE id=?", 
-                                     (adm_p, adm_s, adm_h, adm_sem, str(adm_d), u_row['id']))
+                                     (a_p, a_s, a_h, a_sem, str(a_d), u_row['id']))
                         conn.commit(); st.rerun()
 
-                # Gestion des rôles et suppression
-                ca, cb, cc = st.columns(3)
-                if u_row['role'] == 'membre' and ca.button("🔼 Faire Admin", key=f"prm{u_row['id']}"):
-                    conn.execute("UPDATE users SET role='admin' WHERE id=?", (u_row['id'],)); conn.commit(); st.rerun()
-                if u_row['role'] == 'admin' and st.session_state['user_id'] == 1 and ca.button("🔽 Faire Membre", key=f"rtr{u_row['id']}"):
-                    conn.execute("UPDATE users SET role='membre' WHERE id=?", (u_row['id'],)); conn.commit(); st.rerun()
-                if cc.button("🗑️ Supprimer", key=f"del{u_row['id']}", type="primary"):
-                    conn.execute("DELETE FROM users WHERE id=?", (u_row['id'],)); conn.commit(); st.rerun()
+                # Actions sur les grades
+                cols = st.columns(3)
+                if u_row['role'] == 'membre':
+                    if cols[0].button("🔼 Promouvoir Admin", key=f"up_{u_row['id']}"):
+                        conn.execute("UPDATE users SET role='admin' WHERE id=?", (u_row['id'],)); conn.commit(); st.rerun()
+                elif u_row['id'] != 1: # On ne rétrograde pas le super-admin (ID 1)
+                    if cols[0].button("🔽 Rendre Membre", key=f"down_{u_row['id']}"):
+                        conn.execute("UPDATE users SET role='membre' WHERE id=?", (u_row['id'],)); conn.commit(); st.rerun()
+                
+                if u_row['id'] != 1: # On ne supprime pas le super-admin
+                    if cols[2].button("🗑️ Supprimer", key=f"del_{u_row['id']}", type="primary"):
+                        conn.execute("DELETE FROM users WHERE id=?", (u_row['id'],)); conn.commit(); st.rerun()
 
         st.divider()
-        st.subheader("📊 Historique des actions")
+        st.subheader("📊 Historique Global")
         logs = pd.read_sql_query("SELECT * FROM history ORDER BY id DESC", conn)
-        ed_logs = st.data_editor(logs, num_rows="dynamic", use_container_width=True)
-        if st.button("Enregistrer les changements de l'historique"):
-            conn.execute("DELETE FROM history")
-            ed_logs.to_sql('history', conn, if_exists='append', index=False)
-            conn.commit(); st.success("Historique mis à jour.")
+        st.dataframe(logs, use_container_width=True)
+
     conn.close()
