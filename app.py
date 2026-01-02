@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import date, datetime
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Suivi Coran - Fix Final", layout="wide")
+st.set_page_config(page_title="Suivi Coran - Admin Pro", layout="wide")
 
 # --- DONNÉES SOURATES ---
 DATA_CORAN = {
@@ -44,77 +44,39 @@ def get_connection():
 
 def init_db():
     conn = get_connection()
-    # Création des tables si elles n'existent pas
     conn.execute('''CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY, 
-        username TEXT UNIQUE, 
-        password TEXT, 
-        role TEXT, 
-        page_actuelle INT DEFAULT 604, 
-        sourate TEXT DEFAULT 'An-Nas', 
-        obj_hizb INT DEFAULT 0, 
-        date_cible TEXT, 
-        pages_par_semaine_fixe REAL DEFAULT 0.0)''')
-    
+        id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, role TEXT, 
+        page_actuelle INT DEFAULT 604, sourate TEXT DEFAULT 'An-Nas', 
+        obj_hizb INT DEFAULT 0, date_cible TEXT, pages_par_semaine_fixe REAL DEFAULT 0.0)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS history (
-        id INTEGER PRIMARY KEY, 
-        username TEXT, 
-        date_enregistrement TEXT, 
-        page_atteinte INT, 
-        sourate_atteinte TEXT)''')
-    
-    # Création de l'admin par défaut
+        id INTEGER PRIMARY KEY, username TEXT, date_enregistrement TEXT, 
+        page_atteinte INT, sourate_atteinte TEXT)''')
     conn.execute("INSERT OR IGNORE INTO users (id, username, password, role) VALUES (1, 'admin', 'admin123', 'admin')")
     conn.commit()
     conn.close()
 
-# INITIALISATION IMMÉDIATE
 init_db()
 
-# --- GESTION SESSION ---
 if 'logged_in' not in st.session_state:
     st.session_state.update({'logged_in': False, 'user': None, 'role': None, 'user_id': None})
 
-# --- INTERFACE CONNEXION ---
+# --- CONNEXION ---
 if not st.session_state['logged_in']:
-    st.title("📖 Suivi Coran")
-    t1, t2 = st.tabs(["Connexion", "S'inscrire"])
-    with t1:
-        u = st.text_input("Pseudo")
-        p = st.text_input("Mot de passe", type="password")
-        if st.button("Se connecter", use_container_width=True):
-            conn = get_connection()
-            # On vérifie les identifiants
-            res = conn.execute("SELECT role, id FROM users WHERE username=? AND password=?", (u, p)).fetchone()
-            conn.close()
-            if res:
-                st.session_state.update({'logged_in': True, 'user': u, 'role': res[0], 'user_id': res[1]})
-                st.rerun()
-            else: st.error("Pseudo ou mot de passe incorrect.")
-    with t2:
-        nu, np = st.text_input("Nouveau Pseudo"), st.text_input("Nouveau MDP", type="password")
-        if st.button("Créer mon compte", use_container_width=True):
-            if nu and np:
-                try:
-                    conn = get_connection()
-                    conn.execute("INSERT INTO users (username, password, role) VALUES (?, ?, 'membre')", (nu, np))
-                    conn.commit()
-                    conn.close()
-                    st.success("Compte créé ! Connectez-vous.")
-                except: st.error("Ce pseudo est déjà utilisé.")
-            else: st.warning("Veuillez remplir les champs.")
-
+    st.title("📖 Suivi Coran Collectif")
+    u = st.text_input("Pseudo")
+    p = st.text_input("Mot de passe", type="password")
+    if st.button("Entrer", use_container_width=True):
+        conn = get_connection()
+        res = conn.execute("SELECT role, id FROM users WHERE username=? AND password=?", (u, p)).fetchone()
+        conn.close()
+        if res:
+            st.session_state.update({'logged_in': True, 'user': u, 'role': res[0], 'user_id': res[1]})
+            st.rerun()
+        else: st.error("Erreur d'accès")
 else:
     # NAVIGATION
     st.sidebar.title(f"👤 {st.session_state['user']}")
-    if st.session_state['role'] == 'admin':
-        page = "Administration"
-        st.sidebar.success("🔧 Mode Admin")
-    else:
-        page = "Mon Suivi"
-        st.sidebar.info("📚 Mode Lecteur")
-
-    st.sidebar.divider()
+    page = "Administration" if st.session_state['role'] == 'admin' else "Mon Suivi"
     if st.sidebar.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.clear()
         st.rerun()
@@ -125,86 +87,74 @@ else:
         st.title("🚀 Ma Progression")
         row = conn.execute("SELECT page_actuelle, sourate, obj_hizb, date_cible, pages_par_semaine_fixe FROM users WHERE id=?", (st.session_state['user_id'],)).fetchone()
         
-        # Sécurité valeurs par défaut
-        p_act = row[0] if row[0] is not None else 604
-        h_obj = row[2] if row[2] is not None else 0
-        d_str = row[3] if row[3] else str(date.today())
-        p_sem_fixe = row[4] if row[4] is not None else 0.0
-
-        p_cible = 582 if h_obj == 2 else (604 - ((h_obj - 1) * 10) if h_obj > 0 else p_act)
-        p_restantes = max(0, p_act - p_cible)
-        try: jours = (datetime.strptime(d_str, '%Y-%m-%d').date() - date.today()).days
-        except: jours = 0
-        p_hebdo = round((p_restantes / max(1, jours)) * 7, 1) if jours > 0 else p_sem_fixe
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Pages restantes", p_restantes)
-        c2.metric("Jours restants", max(0, jours))
-        c3.metric("Rythme Hebdo", f"{p_hebdo} p.")
+        # LOGIQUE DE CALCUL PAGE CIBLE
+        p_act = row[0]
+        h_obj = row[2]
+        # On définit la page cible selon le Hizb (ex: Hizb 10 = page 514)
+        # Formule : la fin du Hizb N est à la page (604 - (N * 10)) + 1 environ
+        p_cible = 604 - (h_obj * 10)
+        p_restantes = p_act - p_cible
+        
+        c1, c2 = st.columns(2)
+        c1.metric("Pages à faire", max(0, p_restantes))
+        c2.info(f"Objectif : Fin du Hizb {h_obj}")
 
         st.divider()
-        s_list = list(DATA_CORAN.keys())
-        current_s = row[1] if row[1] in s_list else "An-Nas"
-        choix_s = st.selectbox("Sourate actuelle", s_list, index=s_list.index(current_s))
-        
+        choix_s = st.selectbox("Quelle sourate as-tu terminée ?", list(DATA_CORAN.keys()), index=list(DATA_CORAN.keys()).index(row[1]))
         p_deb, p_fin = DATA_CORAN[choix_s]
         nb_p = p_fin - p_deb + 1
-        page_finale = p_deb
         
         if nb_p > 1:
-            num_p = st.number_input(f"Jusqu'à quelle page de {choix_s} ?", 1, nb_p, 1)
-            page_finale = p_deb + (num_p - 1)
-        
-        st.info(f"📍 Position : Page {page_finale}")
+            num_p = st.number_input(f"Tu as fini la page n° combien de {choix_s} ?", 1, nb_p, 1)
+            # Correction logique : Si je fini page 2 de Jumua (p 553), ma page actuelle est 553 - (2-1) = 552
+            page_calculee = p_fin - (num_p - 1)
+        else:
+            page_calculee = p_deb
 
-        with st.expander("🎯 Mes Objectifs"):
-            nh = st.number_input("Hizb Cible (ex: 2 pour Naba)", value=int(h_obj))
-            nsem = st.number_input("Objectif Pages/Semaine fixe", value=float(p_sem_fixe))
-            nd = st.date_input("Date Cible", value=datetime.strptime(d_str, '%Y-%m-%d').date())
-
-        if st.button("💾 Enregistrer mes progrès", use_container_width=True):
-            conn.execute("UPDATE users SET page_actuelle=?, sourate=?, obj_hizb=?, date_cible=?, pages_par_semaine_fixe=? WHERE id=?", 
-                         (page_finale, choix_s, nh, str(nd), nsem, st.session_state['user_id']))
+        if st.button("💾 Valider mes progrès", use_container_width=True):
+            conn.execute("UPDATE users SET page_actuelle=?, sourate=? WHERE id=?", (page_calculee, choix_s, st.session_state['user_id']))
             conn.execute("INSERT INTO history (username, date_enregistrement, page_atteinte, sourate_atteinte) VALUES (?,?,?,?)",
-                         (st.session_state['user'], str(date.today()), page_finale, choix_s))
+                         (st.session_state['user'], str(date.today()), page_calculee, choix_s))
             conn.commit()
-            st.success("Progression enregistrée !")
+            st.success(f"Bravo ! Tu es à la page {page_calculee}")
             st.rerun()
 
     elif page == "Administration":
-        st.title("🛠️ Gestion des membres")
-        all_u = pd.read_sql_query("SELECT * FROM users", conn)
+        st.title("🛠️ Panneau de Contrôle")
         
-        for _, u_row in all_u.iterrows():
-            with st.expander(f"👤 {u_row['username']} ({u_row['role']})"):
-                # Protection
-                s_p = int(u_row['page_actuelle']) if u_row['page_actuelle'] is not None else 604
-                s_h = int(u_row['obj_hizb']) if u_row['obj_hizb'] is not None else 0
-                s_s = float(u_row['pages_par_semaine_fixe']) if u_row['pages_par_semaine_fixe'] is not None else 0.0
-                s_sourate = u_row['sourate'] if u_row['sourate'] in DATA_CORAN else "An-Nas"
-                
-                with st.form(key=f"adm_u_{u_row['id']}"):
-                    c1, c2 = st.columns(2)
-                    new_s = c1.selectbox("Sourate", list(DATA_CORAN.keys()), index=list(DATA_CORAN.keys()).index(s_sourate))
-                    new_p = c2.number_input("Page Coran", value=s_p)
-                    new_h = c1.number_input("Hizb Cible", value=s_h)
-                    new_sem = c2.number_input("Pages/Semaine", value=s_s)
+        # --- NOUVEAU : TABLEAU RÉCAPITULATIF ---
+        st.subheader("📊 État des lieux des membres")
+        query = """
+            SELECT u.username as Pseudo, u.sourate as Sourate, u.page_actuelle as 'Page Coran', 
+            MAX(h.date_enregistrement) as 'Dernière Activité'
+            FROM users u
+            LEFT JOIN history h ON u.username = h.username
+            WHERE u.role != 'admin'
+            GROUP BY u.username
+        """
+        df_membres = pd.read_sql_query(query, conn)
+        st.dataframe(df_membres, use_container_width=True)
+
+        st.divider()
+        
+        # --- GESTION INDIVIDUELLE ---
+        all_users = conn.execute("SELECT * FROM users WHERE role != 'admin'").fetchall()
+        for u_row in all_users:
+            with st.expander(f"👤 Modifier {u_row[1]}"):
+                with st.form(f"form_{u_row[0]}"):
+                    new_h = st.number_input("Hizb Cible", value=u_row[6], key=f"h_{u_row[0]}")
+                    new_s = st.selectbox("Sourate", list(DATA_CORAN.keys()), index=list(DATA_CORAN.keys()).index(u_row[5]), key=f"s_{u_row[0]}")
+                    new_p = st.number_input("Page Coran Directe", value=u_row[4], key=f"p_{u_row[0]}")
                     
-                    try: d_v = datetime.strptime(u_row['date_cible'], '%Y-%m-%d').date() if u_row['date_cible'] else date.today()
-                    except: d_v = date.today()
-                    new_d = st.date_input("Date Cible", value=d_v)
-                    
-                    if st.form_submit_button("✅ Appliquer les modifications"):
-                        conn.execute("UPDATE users SET page_actuelle=?, sourate=?, obj_hizb=?, pages_par_semaine_fixe=?, date_cible=? WHERE id=?", 
-                                     (new_p, new_s, new_h, new_sem, str(new_d), u_row['id']))
+                    if st.form_submit_button("Sauvegarder"):
+                        conn.execute("UPDATE users SET obj_hizb=?, sourate=?, page_actuelle=? WHERE id=?", 
+                                     (new_h, new_s, new_p, u_row[0]))
                         conn.commit()
                         st.rerun()
+                
+                if st.button(f"🗑️ Supprimer {u_row[1]}", key=f"del_{u_row[0]}"):
+                    conn.execute("DELETE FROM users WHERE id=?", (u_row[0],))
+                    conn.commit()
+                    st.rerun()
 
-                # Actions grades
-                if u_row['id'] != 1:
-                    c_a, c_b = st.columns(2)
-                    if u_row['role'] == 'membre' and c_a.button("🔼 Rendre Admin", key=f"up_{u_row['id']}"):
-                        conn.execute("UPDATE users SET role='admin' WHERE id=?", (u_row['id'],)); conn.commit(); st.rerun()
-                    if c_b.button("🗑️ Supprimer", key=f"del_{u_row['id']}", type="primary"):
-                        conn.execute("DELETE FROM users WHERE id=?", (u_row['id'],)); conn.commit(); st.rerun()
     conn.close()
