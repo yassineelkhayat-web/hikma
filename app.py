@@ -6,7 +6,7 @@ from datetime import date, datetime
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Suivi Coran", layout="wide")
 
-# --- DONNÉES ---
+# --- DONNÉES SOURATES (Ordre pour système inversé) ---
 SURATES_PAGES = {
     "An-Nas": 604, "Al-Falaq": 604, "Al-Ikhlas": 604, "Al-Masad": 603, "An-Nasr": 603,
     "Al-Kafirun": 603, "Al-Kawthar": 602, "Al-Maun": 602, "Quraish": 602, "Al-Fil": 601,
@@ -33,12 +33,13 @@ SURATES_PAGES = {
     "An-Nisa": 77, "Al-Imran": 50, "Al-Baqara": 2, "Al-Fatiha": 1
 }
 
+# --- DB SETUP ---
 def get_connection():
     return sqlite3.connect('coran_data.db', check_same_thread=False)
 
 def init_db():
     conn = get_connection()
-    conn.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, role TEXT, page_actuelle INT, sourate TEXT, obj_hizb INT, date_cible TEXT, pages_par_jour_fixe REAL)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, role TEXT, page_actuelle INT, sourate TEXT, obj_hizb INT, date_cible TEXT, pages_par_semaine_fixe REAL)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY, username TEXT, date_enregistrement TEXT, page_atteinte INT, sourate_atteinte TEXT)''')
     conn.execute("INSERT OR IGNORE INTO users (username, password, role) VALUES ('admin', 'admin123', 'admin')")
     conn.commit()
@@ -46,11 +47,10 @@ def init_db():
 
 init_db()
 
-# --- SESSION ---
+# --- NAVIGATION ---
 if 'logged_in' not in st.session_state:
     st.session_state.update({'logged_in': False, 'user': None, 'role': None, 'page': "Accueil"})
 
-# --- CONNEXION ---
 if not st.session_state['logged_in']:
     st.title("🌙 Connexion")
     u = st.text_input("Pseudo")
@@ -70,61 +70,71 @@ if not st.session_state['logged_in']:
         except: st.error("Pseudo déjà pris.")
 
 else:
-    # NAVIGATION
     st.sidebar.title(f"👤 {st.session_state['user']}")
-    if st.sidebar.button("🏠 Mon Suivi"): st.session_state['page'] = "Accueil"
-    if st.sidebar.button("⚙️ Administration"): st.session_state['page'] = "Paramètres"
-    if st.sidebar.button("🚪 Déconnexion"): st.session_state.clear(); st.rerun()
+    if st.sidebar.button("🏠 Mon Suivi", use_container_width=True): st.session_state['page'] = "Accueil"
+    if st.sidebar.button("⚙️ Administration", use_container_width=True): st.session_state['page'] = "Paramètres"
+    st.sidebar.divider()
+    if st.sidebar.button("🚪 Déconnexion", use_container_width=True): st.session_state.clear(); st.rerun()
 
     conn = get_connection()
 
     if st.session_state['page'] == "Accueil":
         st.title("🏠 Mon Suivi")
         
-        row = conn.execute("SELECT page_actuelle, sourate, obj_hizb, date_cible, pages_par_jour_fixe FROM users WHERE username=?", (st.session_state['user'],)).fetchone()
-        p_act = row[0] if row[0] is not None else 604
-        h_obj = row[2] if row[2] is not None else 0
-        d_str = row[3] if row[3] is not None else str(date.today())
-        p_fixe = row[4] if row[4] is not None else 0.0
+        row = conn.execute("SELECT page_actuelle, sourate, obj_hizb, date_cible, pages_par_semaine_fixe FROM users WHERE username=?", (st.session_state['user'],)).fetchone()
+        p_act = row[0] or 604
+        h_obj = row[2] or 0
+        d_str = row[3] or str(date.today())
+        p_semaine_fixe = row[4] or 0.0
 
         # --- CALCULS ---
         try:
             jours = (datetime.strptime(d_str, '%Y-%m-%d').date() - date.today()).days
-            if jours < 0: jours = 0
+            jours = max(0, jours)
         except: jours = 0
 
-        # Calcul pages restantes (Inversé : on va de 604 vers 1)
         if h_obj > 0:
             p_cible = 604 - ((h_obj - 1) * 10)
-            diff = p_act - p_cible
-            p_restantes = max(0, diff)
-            p_jour = round(p_restantes / jours, 2) if jours > 0 else 0
+            p_restantes = max(0, p_act - p_cible)
+            # Pages par semaine = (Pages / jours) * 7
+            p_par_semaine = round((p_restantes / jours) * 7, 1) if jours > 0 else 0
         else:
-            p_restantes = "Fixe"
-            p_jour = p_fixe
+            p_restantes = "N/A"
+            p_par_semaine = p_semaine_fixe
 
         col1, col2, col3 = st.columns(3)
         col1.metric("Pages restantes", p_restantes)
         col2.metric("Jours restants", jours)
-        col3.metric("Objectif / Jour", f"{p_jour} p.")
+        col3.metric("Objectif / Semaine", f"{p_par_semaine} p.")
 
         # --- FORMULAIRE ---
         with st.form("maj"):
-            st.subheader("Mettre à jour")
-            # Bouton de déploiement (selectbox)
+            st.subheader("Mettre à jour mes progrès")
+            
             s_list = list(SURATES_PAGES.keys())
             choix_s = st.selectbox("Sourate actuelle", options=s_list, index=s_list.index(row[1]) if row[1] in s_list else 0)
+            p_final = st.number_input("Page exacte actuelle", value=SURATES_PAGES[choix_s])
             
-            p_auto = SURATES_PAGES[choix_s]
-            p_final = st.number_input("Page exacte", value=p_auto)
+            st.divider()
+            h_in = st.number_input("Objectif Hizb (1=Sabbih, 2=3ama...)", value=int(h_obj))
             
-            h_in = st.number_input("Objectif Hizb (1=Sabbih...)", value=int(h_obj))
-            p_f_in = st.number_input("OU Objectif pages/jour fixe", value=float(p_fixe))
-            d_in = st.date_input("Date cible", value=datetime.strptime(d_str, '%Y-%m-%d').date())
+            # --- AFFICHAGE SOURATE CIBLE AUTO ---
+            if h_in > 0:
+                p_cible_calc = 604 - ((h_in - 1) * 10)
+                # Trouver la sourate qui correspond à cette page cible
+                sourate_cible = "Inconnue"
+                for name, pg in SURATES_PAGES.items():
+                    if pg <= p_cible_calc:
+                        sourate_cible = name
+                        break
+                st.info(f"🎯 Objectif : Arriver à la sourate **{sourate_cible}** (Page {p_cible_calc})")
+            
+            p_sem_in = st.number_input("OU Objectif pages/semaine fixe", value=float(p_semaine_fixe))
+            d_in = st.date_input("Date cible finale", value=datetime.strptime(d_str, '%Y-%m-%d').date())
             
             if st.form_submit_button("Enregistrer"):
-                conn.execute("UPDATE users SET page_actuelle=?, sourate=?, obj_hizb=?, date_cible=?, pages_par_jour_fixe=? WHERE username=?",
-                             (p_final, choix_s, h_in, str(d_in), p_f_in, st.session_state['user']))
+                conn.execute("UPDATE users SET page_actuelle=?, sourate=?, obj_hizb=?, date_cible=?, pages_par_semaine_fixe=? WHERE username=?",
+                             (p_final, choix_s, h_in, str(d_in), p_sem_in, st.session_state['user']))
                 conn.execute("INSERT INTO history (username, date_enregistrement, page_atteinte, sourate_atteinte) VALUES (?,?,?,?)",
                              (st.session_state['user'], str(date.today()), p_final, choix_s))
                 conn.commit(); st.rerun()
@@ -132,32 +142,30 @@ else:
     elif st.session_state['page'] == "Paramètres":
         st.title("⚙️ Administration")
         if st.session_state['role'] == 'admin':
-            
-            # GESTION MEMBRES
             st.subheader("👥 Gestion des membres")
             all_u = pd.read_sql_query("SELECT * FROM users WHERE role='membre'", conn)
             
             for _, u_row in all_u.iterrows():
-                with st.expander(f"Modifier {u_row['username']}"):
-                    # Ici l'admin voit tout
-                    st.write(f"Dernière sourate : {u_row['sourate']} (Page {u_row['page_actuelle']})")
-                    new_h = st.number_input("Changer Hizb cible", value=int(u_row['obj_hizb'] or 0), key=f"h_{u_row['id']}")
-                    if st.button("Sauvegarder", key=f"s_{u_row['id']}"):
-                        conn.execute("UPDATE users SET obj_hizb=? WHERE id=?", (new_h, u_row['id']))
+                with st.expander(f"👤 {u_row['username']} - Page {u_row['page_actuelle']}"):
+                    col_admin1, col_admin2 = st.columns(2)
+                    new_h = col_admin1.number_input("Modifier Hizb cible", value=int(u_row['obj_hizb'] or 0), key=f"h_{u_row['id']}")
+                    new_ps = col_admin2.number_input("Pages/Semaine fixe", value=float(u_row['pages_par_semaine_fixe'] or 0), key=f"ps_{u_row['id']}")
+                    
+                    if st.button("Mettre à jour le membre", key=f"btn_{u_row['id']}"):
+                        conn.execute("UPDATE users SET obj_hizb=?, pages_par_semaine_fixe=? WHERE id=?", (new_h, new_ps, u_row['id']))
                         conn.commit(); st.rerun()
                     
-                    if st.button("SUPPRIMER LE MEMBRE", type="primary", key=f"d_{u_row['id']}"):
+                    if st.button("SUPPRIMER CE COMPTE", type="primary", key=f"del_{u_row['id']}"):
                         conn.execute("DELETE FROM users WHERE id=?", (u_row['id'],))
                         conn.commit(); st.rerun()
 
             st.divider()
-            # HISTORIQUE SANS LE BUG
-            st.subheader("📅 Historique")
-            date_h = st.date_input("Choisir une date", value=date.today())
+            st.subheader("📅 Historique des progrès")
+            date_h = st.date_input("Consulter la date :", value=date.today())
             hist_data = pd.read_sql_query("SELECT username, page_atteinte, sourate_atteinte FROM history WHERE date_enregistrement=?", conn, params=(str(date_h),))
             if not hist_data.empty:
                 st.dataframe(hist_data, use_container_width=True)
             else:
-                st.info("Aucune donnée pour ce jour.")
+                st.info("Aucun log pour cette date.")
 
     conn.close()
