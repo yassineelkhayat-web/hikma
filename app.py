@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
+import os
 from datetime import date, datetime
 
 # --- CONFIGURATION ---
@@ -87,9 +88,8 @@ if not st.session_state['logged_in']:
 else:
     st.sidebar.title(f"👤 {st.session_state['user']}")
     
-    # --- LOGIQUE DE RESTRICTION ---
     if st.session_state['role'] == 'admin':
-        page = "Administration" # Forcé pour l'admin
+        page = "Administration"
     else:
         page = "Mon Suivi"
 
@@ -98,7 +98,7 @@ else:
 
     conn = get_connection()
 
-    # --- MON SUIVI (MEMBRE UNIQUEMENT) ---
+    # --- MON SUIVI ---
     if page == "Mon Suivi":
         st.title("🚀 Ma Progression")
         row = conn.execute("SELECT page_actuelle, sourate, obj_hizb, date_cible, pages_par_semaine_fixe FROM users WHERE id=?", (st.session_state['user_id'],)).fetchone()
@@ -138,70 +138,64 @@ else:
                          (st.session_state['user'], str(date.today()), page_calculee, choix_s))
             conn.commit(); st.success("Progression sauvegardée !"); st.rerun()
 
-    # --- ADMINISTRATION (ADMIN UNIQUEMENT) ---
+    # --- ADMINISTRATION ---
     elif page == "Administration":
         st.title("🛠️ Panneau de Contrôle Admin")
         t_dash, t_hist, t_users = st.tabs(["📊 Tableau de Bord (Éditeur)", "📅 Historique par Date", "⚙️ Gestion Individuelle"])
 
         with t_dash:
-            st.subheader("Modifier directement les données des membres")
-            # Charger les données éditables
-            df_edit = pd.read_sql_query("""
-                SELECT id, username as Pseudo, role as Grade, sourate as Sourate, 
-                page_actuelle as Page, obj_hizb as 'Hizb Cible'
-                FROM users WHERE role != 'admin'
-            """, conn)
-            
-            # Utilisation de st.data_editor pour permettre la modification directe
-            edited_df = st.data_editor(df_edit, key="main_editor", use_container_width=True, hide_index=True,
-                                      disabled=["id", "Pseudo"]) # On ne change pas l'ID ni le Pseudo ici
+            st.subheader("Modifier directement les données")
+            df_edit = pd.read_sql_query("SELECT id, username as Pseudo, role as Grade, sourate as Sourate, page_actuelle as Page, obj_hizb as 'Hizb Cible' FROM users WHERE role != 'admin'", conn)
+            edited_df = st.data_editor(df_edit, key="main_editor", use_container_width=True, hide_index=True, disabled=["id", "Pseudo"])
 
-            if st.button("💾 Sauvegarder toutes les modifications du tableau"):
+            if st.button("💾 Sauvegarder les modifications du tableau"):
                 for index, row in edited_df.iterrows():
-                    conn.execute("""UPDATE users SET role=?, sourate=?, page_actuelle=?, obj_hizb=? 
-                                    WHERE id=?""", (row['Grade'], row['Sourate'], row['Page'], row['Hizb Cible'], row['id']))
-                conn.commit()
-                st.success("Toutes les données du tableau ont été mises à jour !")
-                st.rerun()
-
-            st.divider()
-            csv = edited_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Télécharger la sauvegarde CSV", csv, "hikma_backup.csv", "text/csv")
+                    conn.execute("UPDATE users SET role=?, sourate=?, page_actuelle=?, obj_hizb=? WHERE id=?", (row['Grade'], row['Sourate'], row['Page'], row['Hizb Cible'], row['id']))
+                conn.commit(); st.success("Données mises à jour !"); st.rerun()
 
         with t_hist:
-            st.subheader("Vérifier les positions à une date précise")
+            st.subheader("Positions historiques")
             d_recherche = st.date_input("Date à consulter", value=date.today())
-            q_hist = f"""
-                SELECT h.username as Pseudo, h.sourate_atteinte as Sourate, h.page_atteinte as Page, h.date_enregistrement as Date
-                FROM history h
-                INNER JOIN (
-                    SELECT username, MAX(date_enregistrement) as MD FROM history
-                    WHERE date_enregistrement <= '{d_recherche}' GROUP BY username
-                ) latest ON h.username = latest.username AND h.date_enregistrement = latest.MD
-            """
+            q_hist = f"SELECT h.username as Pseudo, h.sourate_atteinte as Sourate, h.page_atteinte as Page FROM history h INNER JOIN (SELECT username, MAX(date_enregistrement) as MD FROM history WHERE date_enregistrement <= '{d_recherche}' GROUP BY username) latest ON h.username = latest.username AND h.date_enregistrement = latest.MD"
             df_h = pd.read_sql_query(q_hist, conn)
-            if not df_h.empty:
-                st.table(df_h)
-            else:
-                st.warning("Pas de logs à cette date.")
+            st.table(df_h) if not df_h.empty else st.warning("Pas de logs.")
 
         with t_users:
-            # On garde l'expander pour les réglages plus fins (dates cibles, suppression)
+            st.subheader("Outils de secours et Grades")
+            
+            # --- NOUVELLE FONCTIONNALITÉ D'IMPORTATION ---
+            with st.expander("📥 Importation de secours (GitHub)"):
+                st.write("Si vous avez un fichier `import_membres.csv` sur votre GitHub, vous pouvez restaurer les données ici.")
+                if st.button("🚀 Synchroniser depuis GitHub"):
+                    if os.path.exists("import_membres.csv"):
+                        try:
+                            imp_df = pd.read_csv("import_membres.csv")
+                            for _, r in imp_df.iterrows():
+                                # On insère l'utilisateur s'il n'existe pas, sinon on met à jour
+                                conn.execute("""INSERT OR REPLACE INTO users (username, role, sourate, page_actuelle, obj_hizb) 
+                                                VALUES (?, ?, ?, ?, ?)""", (r['Pseudo'], r['Grade'], r['Sourate'], r['Page'], r['Hizb Cible']))
+                            conn.commit()
+                            st.success("Synchronisation réussie ! Les membres ont été restaurés.")
+                            st.rerun()
+                        except Exception as e: st.error(f"Erreur : {e}")
+                    else: st.warning("Le fichier 'import_membres.csv' n'a pas été trouvé sur GitHub.")
+
+            st.divider()
             all_users = conn.execute("SELECT * FROM users WHERE id != 1").fetchall()
             for u in all_users:
-                with st.expander(f"👤 Paramètres avancés de {u[1]}"):
+                with st.expander(f"👤 {u[1]} (Grade: {u[3]})"):
                     with st.form(f"f_adm_{u[0]}"):
+                        is_admin = st.checkbox("Définir comme Administrateur", value=(u[3] == "admin"))
                         c1, c2 = st.columns(2)
                         n_rate = c1.number_input("Rythme fixe p/sem", value=u[8] or 0.0)
                         try: n_date_val = datetime.strptime(u[7], '%Y-%m-%d').date() if u[7] else date.today()
                         except: n_date_val = date.today()
                         n_d_cible = c2.date_input("Date Cible", value=n_date_val)
-                        if st.form_submit_button("Sauvegarder Rythme/Date"):
-                            conn.execute("UPDATE users SET pages_par_semaine_fixe=?, date_cible=? WHERE id=?", (n_rate, str(n_d_cible), u[0]))
+                        if st.form_submit_button("✅ Valider"):
+                            new_role = "admin" if is_admin else "membre"
+                            conn.execute("UPDATE users SET role=?, pages_par_semaine_fixe=?, date_cible=? WHERE id=?", (new_role, n_rate, str(n_d_cible), u[0]))
                             conn.commit(); st.rerun()
-                    
-                    if st.button(f"🗑️ Supprimer définitivement {u[1]}", key=f"del_u_{u[0]}", type="primary"):
-                        conn.execute("DELETE FROM users WHERE id=?", (u[0],))
-                        conn.commit(); st.rerun()
+                    if st.button(f"🗑️ Supprimer {u[1]}", key=f"del_{u[0]}", type="primary"):
+                        conn.execute("DELETE FROM users WHERE id=?", (u[0],)); conn.commit(); st.rerun()
 
     conn.close()
