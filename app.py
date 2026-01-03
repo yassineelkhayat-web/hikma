@@ -61,17 +61,14 @@ def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
     p_cible = 604 - (int(h_cible) * 10)
     p_restantes = max(0, int(p_actuelle) - p_cible)
     j_restants = max(0, (d_cible - date.today()).days)
-    
-    # Rythme auto (pages/semaine)
     rythme_auto = round((p_restantes / j_restants) * 7, 1) if j_restants > 0 else 0.0
     
-    # Date estimée si rythme fixe
     d_estimee = d_cible
     if float(rythme_f) > 0:
         semaines_besoin = p_restantes / float(rythme_f)
         d_estimee = date.today() + timedelta(weeks=semaines_besoin)
     
-    return p_restantes, j_restants, rythme_auto, d_estimee, d_cible
+    return p_restantes, j_restants, rythme_auto, d_estimee, d_cible, p_cible
 
 # --- AUTHENTIFICATION ---
 if not st.session_state['logged_in']:
@@ -101,7 +98,7 @@ else:
     # --- INTERFACE MEMBRE ---
     if st.session_state['role'] != 'admin':
         u_data = supabase.table("users").select("*").eq("id", st.session_state['user_id']).execute().data[0]
-        p_rest, j_rest, r_auto, d_est, d_cib = calculer_metrics(u_data['page_actuelle'], u_data['obj_hizb'], u_data['rythme_fixe'], u_data['date_cible'])
+        p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(u_data['page_actuelle'], u_data['obj_hizb'], u_data['rythme_fixe'], u_data['date_cible'])
         
         st.title("🚀 Ma Progression")
         c1, c2, c3 = st.columns(3)
@@ -113,25 +110,19 @@ else:
             c2.metric("Jours restants", j_rest)
             c3.metric("Rythme conseillé", f"{r_auto} p/sem")
 
-# --- BARRE DE PROGRESSION VISUELLE ---
-st.subheader("📊 Progression vers l'objectif")
-# Calcul du pourcentage : (Pages lues / Total à lire)
-# Note : On part de 604 (début) vers page_cible
-total_pages_objectif = 604 - p_cible
-if total_pages_objectif > 0:
-    pages_faites = total_pages_objectif - p_restantes
-    pourcentage = min(100, max(0, int((pages_faites / total_pages_objectif) * 100)))
-else:
-    pourcentage = 100
+        # --- BARRE DE PROGRESSION VISUELLE ---
+        st.subheader("📊 Progression vers l'objectif")
+        total_pages_objectif = 604 - p_cib
+        if total_pages_objectif > 0:
+            pages_faites = total_pages_objectif - p_rest
+            pourcentage = min(100, max(0, int((pages_faites / total_pages_objectif) * 100)))
+        else:
+            pourcentage = 100
+        st.progress(pourcentage / 100)
+        st.write(f"**{pourcentage}%** de ton objectif atteint !")
+        if pourcentage >= 100: st.balloons()
 
-st.progress(pourcentage / 100)
-st.write(f"**{pourcentage}%** de ton objectif atteint !")
-
-if pourcentage >= 100:
-    st.balloons()
-    st.success("Félicitations ! Objectif atteint ! 🎉")
-
-    st.divider()
+        st.divider()
         colA, colB = st.columns(2)
         with colA:
             st.subheader("🎯 Objectifs")
@@ -160,7 +151,6 @@ if pourcentage >= 100:
         if users:
             df = pd.DataFrame(users)
             st.subheader("📊 Vue d'ensemble")
-            # Tableau global éditable
             edited_df = st.data_editor(
                 df[["id", "username", "role", "sourate", "page_actuelle", "obj_hizb", "rythme_fixe", "date_cible"]], 
                 hide_index=True, use_container_width=True, disabled=["id", "username"]
@@ -175,31 +165,32 @@ if pourcentage >= 100:
                 st.success("Modifications appliquées !"); st.rerun()
 
             st.divider()
-
-            # --- FOCUS PAR MEMBRE (DÉPLOYABLE) ---
             st.subheader("🔍 Focus par membre")
             for user in users:
                 with st.expander(f"👤 {user['username'].upper()} - Gestion détaillée"):
-                    # Calculs Metrics
-                    p_rest, j_rest, r_auto, d_est, d_cib = calculer_metrics(
+                    p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(
                         user['page_actuelle'], user['obj_hizb'], user['rythme_fixe'], user['date_cible']
                     )
                     
-                    # Dashboard Individuel
                     m1, m2, m3 = st.columns(3)
                     m1.metric("Pages restantes", p_rest)
                     m2.metric("Jours restants", j_rest)
                     m3.metric("Rythme idéal", f"{r_auto} p/sem")
+
+                    # Barre de progression pour l'admin aussi
+                    total_p_obj = 604 - p_cib
+                    perc = min(100, max(0, int(((total_p_obj - p_rest) / total_p_obj) * 100))) if total_p_obj > 0 else 100
+                    st.progress(perc / 100)
+                    st.caption(f"Progression : {perc}%")
                     
-                    # Formulaire de modification miroir
                     c_adm1, c_adm2 = st.columns(2)
                     with c_adm1:
-                        st.write("**🎯 Paramètres Objectifs**")
+                        st.write("**🎯 Objectifs**")
                         adm_h = st.number_input("Hizb cible", 0, 60, int(user['obj_hizb']), key=f"h_{user['id']}")
                         adm_d = st.date_input("Date cible", d_cib, key=f"d_{user['id']}")
                         adm_r = st.number_input("Rythme fixe (p/sem)", 0.0, 100.0, float(user['rythme_fixe']), key=f"r_{user['id']}")
                     with c_adm2:
-                        st.write("**📖 État de Lecture**")
+                        st.write("**📖 Lecture**")
                         s_list = list(DATA_CORAN.keys())
                         u_s = user['sourate'] if user['sourate'] in s_list else "An-Nas"
                         adm_s = st.selectbox("Sourate", s_list, index=s_list.index(u_s), key=f"s_{user['id']}")
@@ -208,17 +199,13 @@ if pourcentage >= 100:
                         adm_p_reelle = p_fin - (adm_p_s - 1)
                     
                     if st.button(f"Mettre à jour {user['username']}", key=f"btn_{user['id']}", use_container_width=True):
-                        upd_indiv = {
-                            "page_actuelle": adm_p_reelle, "sourate": adm_s, 
-                            "obj_hizb": adm_h, "date_cible": str(adm_date), "rythme_fixe": adm_r
-                        }
+                        upd_indiv = {"page_actuelle": adm_p_reelle, "sourate": adm_s, "obj_hizb": adm_h, "date_cible": str(adm_d), "rythme_fixe": adm_r}
                         supabase.table("users").update(upd_indiv).eq("id", user['id']).execute()
                         st.success("Mis à jour !"); st.rerun()
 
             st.divider()
             st.subheader("🗑️ Zone de danger")
-            if st.button("Supprimer un membre définitivement"):
-                u_to_del = st.selectbox("Choisir le compte à supprimer", [u['username'] for u in users])
-                if st.button("CONFIRMER LA SUPPRESSION"):
-                    supabase.table("users").delete().eq("username", u_to_del).execute()
-                    st.rerun()
+            u_to_del = st.selectbox("Choisir le compte à supprimer", [u['username'] for u in users])
+            if st.button("CONFIRMER LA SUPPRESSION", type="primary"):
+                supabase.table("users").delete().eq("username", u_to_del).execute()
+                st.rerun()
