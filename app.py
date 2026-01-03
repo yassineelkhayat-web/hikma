@@ -58,7 +58,7 @@ DATA_CORAN = {
     "Al-Fajr": (593, 594), "Al-Balad": (594, 594), "Ash-Shams": (595, 595), "Al-Layl": (595, 596),
     "Ad-Duha": (596, 596), "Ash-Sharh": (596, 596), "At-Tin": (597, 597), "Al-Alaq": (597, 598),
     "Al-Qadr": (598, 598), "Al-Bayyina": (598, 599), "Az-Zalzala": (599, 599), "Al-Adiyat": (599, 600),
-    "Al-Qaria": (600, 600), "At-Takathur": (600, 600), "Al-Asr": (601, 601), "Al-Humaza": (601, 601),
+    "Al-Qaria": (600, 600), "At-Talkathur": (600, 600), "Al-Asr": (601, 601), "Al-Humaza": (601, 601),
     "Al-Fil": (601, 601), "Quraish": (602, 602), "Al-Maun": (602, 602), "Al-Kawthar": (602, 602),
     "Al-Kafirun": (603, 603), "An-Nasr": (603, 603), "Al-Masad": (603, 603), "Al-Ikhlas": (604, 604),
     "Al-Falaq": (604, 604), "An-Nas": (604, 604)
@@ -129,57 +129,63 @@ else:
         st.session_state.clear()
         st.rerun()
 
-    # --- 8. PAGE DISCUSSION ---
+    # --- 8. PAGE DISCUSSION (INTERFACE WHATSAPP) ---
     if st.session_state['page'] == 'chat':
         st.title("💬 Messagerie Hikma")
         
-        # Données pour le chat
+        # Récupération des données utilisateurs
         all_users = supabase.table("users").select("id", "username", "role").execute().data
         admins = [u for u in all_users if u['role'] == 'admin']
         membres = [u for u in all_users if u['role'] == 'membre']
 
-        # Bloc d'envoi
-        with st.container(border=True):
+        # Barre de sélection du destinataire
+        col_h1, col_h2 = st.columns([3, 1])
+        with col_h1:
             if st.session_state['role'] == 'admin':
-                mode = st.radio("Mode d'envoi", ["Individuel", "Groupe (Tous)"], horizontal=True)
-                dest_id, group_tag = None, None
-                if mode == "Individuel":
-                    dest_name = st.selectbox("Destinataire", [u['username'] for u in membres])
-                    dest_id = [u['id'] for u in membres if u['username'] == dest_name][0]
-                else:
-                    group_tag = "GROUPE_MEMBRES"
+                selection = st.selectbox("Destinataire :", ["Groupe (Tous)"] + [u['username'] for u in membres])
+                target_id = None if selection == "Groupe (Tous)" else [u['id'] for u in membres if u['username'] == selection][0]
+                group_tag = "GROUPE_MEMBRES" if selection == "Groupe (Tous)" else None
             else:
-                dest_name = st.selectbox("Contacter un admin", [u['username'] for u in admins])
-                dest_id = [u['id'] for u in admins if u['username'] == dest_name][0]
+                selection = st.selectbox("Admin :", [u['username'] for u in admins])
+                target_id = [u['id'] for u in admins if u['username'] == selection][0]
                 group_tag = None
-
-            msg_text = st.text_area("Votre message", placeholder="Écrivez ici...")
-            if st.button("Envoyer", use_container_width=True):
-                if msg_text:
-                    supabase.table("messages").insert({
-                        "sender_id": st.session_state['user_id'],
-                        "receiver_id": dest_id,
-                        "group_name": group_tag,
-                        "content": msg_text
-                    }).execute()
-                    st.success("Message envoyé !"); st.rerun()
+        with col_h2:
+            st.write("") # espacement
+            if st.button("🔄 Actualiser", use_container_width=True): st.rerun()
 
         st.divider()
-        st.subheader("📜 Historique")
-        query = supabase.table("messages").select("*").order("created_at", desc=True).execute()
-        
-        for m in query.data:
-            expediteur = next((u['username'] for u in all_users if u['id'] == m['sender_id']), "Inconnu")
-            afficher = False
-            if st.session_state['role'] == 'admin':
-                afficher = True
-            elif m['sender_id'] == st.session_state['user_id'] or m['receiver_id'] == st.session_state['user_id'] or m['group_name'] == "GROUPE_MEMBRES":
-                afficher = True
-            
-            if afficher:
-                with st.chat_message("user" if m['sender_id'] == st.session_state['user_id'] else "assistant"):
-                    st.write(f"**{expediteur}** : {m['content']}")
-                    st.caption(f"{m['created_at'][:16]}")
+
+        # Zone d'affichage des messages (Ordre chronologique comme WhatsApp)
+        chat_placeholder = st.container()
+        with chat_placeholder:
+            # On récupère les messages du plus ancien au plus récent
+            query = supabase.table("messages").select("*").order("created_at", desc=False).execute()
+            for m in query.data:
+                exp_name = next((u['username'] for u in all_users if u['id'] == m['sender_id']), "Inconnu")
+                is_me = m['sender_id'] == st.session_state['user_id']
+                
+                # Filtrage : l'admin voit tout, le membre voit ses privés + le groupe
+                visible = False
+                if st.session_state['role'] == 'admin': visible = True
+                elif is_me or m['receiver_id'] == st.session_state['user_id'] or m['group_name'] == "GROUPE_MEMBRES":
+                    visible = True
+                
+                if visible:
+                    with st.chat_message("user" if is_me else "assistant"):
+                        st.markdown(f"**{exp_name}**")
+                        st.write(m['content'])
+                        st.caption(f"{m['created_at'][11:16]}")
+
+        # Zone de saisie fixe en bas
+        prompt = st.chat_input("Écrivez votre message...")
+        if prompt:
+            supabase.table("messages").insert({
+                "sender_id": st.session_state['user_id'],
+                "receiver_id": target_id,
+                "group_name": group_tag,
+                "content": prompt
+            }).execute()
+            st.rerun()
 
     # --- 9. PAGE PROGRESSION (HOME) ---
     else:
@@ -248,7 +254,6 @@ else:
                     with st.expander(f"👤 {user['username'].upper()}"):
                         p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(user['page_actuelle'], user['obj_hizb'], user['rythme_fixe'], user['date_cible'])
                         st.write(f"Reste : {p_rest} pages | Idéal : {r_auto} p/sem")
-                        # (Possibilité de rajouter les inputs de modification ici si besoin)
 
                 st.divider()
                 st.subheader("🗑️ Supprimer un membre")
