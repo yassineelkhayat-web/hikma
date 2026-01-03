@@ -69,7 +69,7 @@ def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
 
 # --- AUTHENTIFICATION ---
 if not st.session_state['logged_in']:
-    st.title("📖 Hikma Cloud")
+    st.title("📖 Hikma Bilan")
     t1, t2 = st.tabs(["Connexion", "Inscription"])
     with t1:
         u = st.text_input("Pseudo", key="l1")
