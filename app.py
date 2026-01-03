@@ -3,7 +3,7 @@ import pandas as pd
 from supabase import create_client, Client
 from datetime import date, datetime, timedelta
 
-# --- CONFIGURATION SUPABASE ---
+# --- 1. CONFIGURATION SUPABASE ---
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -12,17 +12,26 @@ except Exception as e:
     st.error("Erreur de configuration : Vérifiez les Secrets Streamlit.")
     st.stop()
 
-# --- CONFIGURATION STREAMLIT ---
+# --- 2. CONFIGURATION STREAMLIT & PWA ---
 st.set_page_config(page_title="HIKMA", layout="wide")
 
-# --- FORCE L'ICÔNE SUR IPAD/IPHONE ---
-# Ce code dit à l'iPad : "Utilise logo.png comme icône d'accueil"
+# Injection du lien pour l'icône iPad/iPhone
 st.markdown(
     f'<link rel="apple-touch-icon" href="logo.png">',
     unsafe_allow_html=True
 )
 
-# --- DONNÉES SOURATES (114) ---
+# --- 3. INITIALISATION DES ÉTATS ---
+if 'logged_in' not in st.session_state:
+    st.session_state.update({
+        'logged_in': False, 
+        'user': None, 
+        'role': None, 
+        'user_id': None,
+        'page': 'home'  # Gère la navigation entre Home et Chat
+    })
+
+# --- 4. DONNÉES SOURATES ---
 DATA_CORAN = {
     "Al-Fatiha": (1, 1), "Al-Baqara": (2, 49), "Al-Imran": (50, 76), "An-Nisa": (77, 106),
     "Al-Maida": (106, 127), "Al-Anam": (128, 150), "Al-Araf": (151, 176), "Al-Anfal": (177, 186),
@@ -55,10 +64,7 @@ DATA_CORAN = {
     "Al-Falaq": (604, 604), "An-Nas": (604, 604)
 }
 
-if 'logged_in' not in st.session_state:
-    st.session_state.update({'logged_in': False, 'user': None, 'role': None, 'user_id': None})
-
-# --- FONCTION DE CALCUL ---
+# --- 5. FONCTIONS UTILES ---
 def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
     try:
         d_cible = datetime.strptime(d_cible_str, '%Y-%m-%d').date()
@@ -74,7 +80,7 @@ def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
         d_estimee = date.today() + timedelta(weeks=semaines_besoin)
     return p_restantes, j_restants, rythme_auto, d_estimee, d_cible, p_cible
 
-# --- AUTHENTIFICATION ---
+# --- 6. AUTHENTIFICATION ---
 if not st.session_state['logged_in']:
     st.title("📖 Hikma Bilan")
     t1, t2 = st.tabs(["Connexion", "Inscription"])
@@ -96,133 +102,157 @@ if not st.session_state['logged_in']:
             except: st.error("Pseudo déjà utilisé.")
 
 else:
-    # --- BARRE LATÉRALE (SIDEBAR) ---
+    # --- 7. SIDEBAR (NAVIGATION) ---
     st.sidebar.title(f"👤 {st.session_state['user']}")
+    
+    if st.sidebar.button("🏠 Ma Progression", use_container_width=True):
+        st.session_state['page'] = 'home'
+        st.rerun()
+
+    if st.sidebar.button("💬 Discussion", use_container_width=True):
+        st.session_state['page'] = 'chat'
+        st.rerun()
+
+    st.sidebar.divider()
     
     if st.session_state['role'] == 'admin':
         with st.sidebar.expander("⚙️ Paramètres Admin"):
-            st.write("**Promouvoir un membre**")
             membres_data = supabase.table("users").select("username").eq("role", "membre").execute().data
             liste_membres = [m['username'] for m in membres_data]
             if liste_membres:
-                user_to_promote = st.selectbox("Choisir un membre", liste_membres)
+                user_to_promote = st.selectbox("Promouvoir", liste_membres)
                 if st.button("Rendre Administrateur"):
                     supabase.table("users").update({"role": "admin"}).eq("username", user_to_promote).execute()
-                    st.success(f"{user_to_promote} est admin !")
-                    st.rerun()
-            else:
-                st.info("Aucun membre à promouvoir.")
+                    st.success("Fait !"); st.rerun()
 
-    if st.sidebar.button("Déconnexion"): 
+    if st.sidebar.button("Déconnexion", use_container_width=True): 
         st.session_state.clear()
         st.rerun()
 
-    # --- INTERFACE MEMBRE ---
-    if st.session_state['role'] != 'admin':
-        u_data = supabase.table("users").select("*").eq("id", st.session_state['user_id']).execute().data[0]
-        p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(u_data['page_actuelle'], u_data['obj_hizb'], u_data['rythme_fixe'], u_data['date_cible'])
+    # --- 8. PAGE DISCUSSION ---
+    if st.session_state['page'] == 'chat':
+        st.title("💬 Messagerie Hikma")
         
-        st.title("🚀 Ma Progression")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Pages restantes", p_rest)
-        if float(u_data['rythme_fixe']) > 0:
-            c2.metric("Date fin estimée", str(d_est))
-            c3.metric("Rythme fixé", f"{u_data['rythme_fixe']} p/sem")
-        else:
-            c2.metric("Jours restants", j_rest)
-            c3.metric("Rythme conseillé", f"{r_auto} p/sem")
+        # Données pour le chat
+        all_users = supabase.table("users").select("id", "username", "role").execute().data
+        admins = [u for u in all_users if u['role'] == 'admin']
+        membres = [u for u in all_users if u['role'] == 'membre']
 
-        st.subheader("📊 Progression vers l'objectif")
-        total_pages_objectif = 604 - p_cib
-        if total_pages_objectif > 0:
-            pages_faites = total_pages_objectif - p_rest
-            pourcentage = min(100, max(0, int((pages_faites / total_pages_objectif) * 100)))
-        else:
-            pourcentage = 100
-        st.progress(pourcentage / 100)
-        st.write(f"**{pourcentage}%** de ton objectif atteint !")
-        if pourcentage >= 100: st.balloons()
+        # Bloc d'envoi
+        with st.container(border=True):
+            if st.session_state['role'] == 'admin':
+                mode = st.radio("Mode d'envoi", ["Individuel", "Groupe (Tous)"], horizontal=True)
+                dest_id, group_tag = None, None
+                if mode == "Individuel":
+                    dest_name = st.selectbox("Destinataire", [u['username'] for u in membres])
+                    dest_id = [u['id'] for u in membres if u['username'] == dest_name][0]
+                else:
+                    group_tag = "GROUPE_MEMBRES"
+            else:
+                dest_name = st.selectbox("Contacter un admin", [u['username'] for u in admins])
+                dest_id = [u['id'] for u in admins if u['username'] == dest_name][0]
+                group_tag = None
+
+            msg_text = st.text_area("Votre message", placeholder="Écrivez ici...")
+            if st.button("Envoyer", use_container_width=True):
+                if msg_text:
+                    supabase.table("messages").insert({
+                        "sender_id": st.session_state['user_id'],
+                        "receiver_id": dest_id,
+                        "group_name": group_tag,
+                        "content": msg_text
+                    }).execute()
+                    st.success("Message envoyé !"); st.rerun()
 
         st.divider()
-        colA, colB = st.columns(2)
-        with colA:
-            st.subheader("🎯 Objectifs")
-            n_hizb = st.number_input("Hizb visé (0-60)", 0, 60, int(u_data['obj_hizb']))
-            n_date = st.date_input("Date cible", d_cib)
-            n_rythme = st.number_input("OU Pages/semaine", 0.0, 100.0, float(u_data['rythme_fixe']))
-        with colB:
-            st.subheader("📖 Mon étude")
-            s_list = list(DATA_CORAN.keys())
-            curr_s = u_data.get('sourate') or "An-Nas"
-            n_s = st.selectbox("Dernière sourate finie", s_list, index=s_list.index(curr_s))
-            p_deb, p_fin = DATA_CORAN[n_s]
-            p_dans_s = st.number_input(f"Page lue dans {n_s}", 1, (p_fin-p_deb+1), 1)
-            n_p_reelle = p_fin - (p_dans_s - 1)
-
-        if st.button("💾 Sauvegarder", use_container_width=True):
-            upd = {"page_actuelle": n_p_reelle, "sourate": n_s, "obj_hizb": n_hizb, "date_cible": str(n_date), "rythme_fixe": n_rythme}
-            supabase.table("users").update(upd).eq("id", st.session_state['user_id']).execute()
-            st.success("Synchronisé !"); st.rerun()
-
-    # --- INTERFACE ADMIN ---
-    else:
-        st.title("🛠️ Administration")
-        res_all = supabase.table("users").select("*").execute()
-        all_users = res_all.data
+        st.subheader("📜 Historique")
+        query = supabase.table("messages").select("*").order("created_at", desc=True).execute()
         
-        if all_users:
-            df_all = pd.DataFrame(all_users)
-            st.subheader("🚨 Données Maître")
-            st.warning("Attention : Toute modification ici est critique.")
-            edited_master = st.data_editor(df_all, hide_index=True, use_container_width=True, disabled=["id"])
+        for m in query.data:
+            expediteur = next((u['username'] for u in all_users if u['id'] == m['sender_id']), "Inconnu")
+            afficher = False
+            if st.session_state['role'] == 'admin':
+                afficher = True
+            elif m['sender_id'] == st.session_state['user_id'] or m['receiver_id'] == st.session_state['user_id'] or m['group_name'] == "GROUPE_MEMBRES":
+                afficher = True
             
-            if st.button("🔥 SAUVEGARDER LES MODIFICATIONS", type="primary"):
-                for _, row in edited_master.iterrows():
-                    payload = row.to_dict()
-                    uid = payload.pop('id')
-                    supabase.table("users").update(payload).eq("id", uid).execute()
-                st.success("Base de données mise à jour !"); st.rerun()
+            if afficher:
+                with st.chat_message("user" if m['sender_id'] == st.session_state['user_id'] else "assistant"):
+                    st.write(f"**{expediteur}** : {m['content']}")
+                    st.caption(f"{m['created_at'][:16]}")
+
+    # --- 9. PAGE PROGRESSION (HOME) ---
+    else:
+        if st.session_state['role'] != 'admin':
+            # --- CODE MEMBRE ---
+            u_data = supabase.table("users").select("*").eq("id", st.session_state['user_id']).execute().data[0]
+            p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(u_data['page_actuelle'], u_data['obj_hizb'], u_data['rythme_fixe'], u_data['date_cible'])
+            
+            st.title("🚀 Ma Progression")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Pages restantes", p_rest)
+            if float(u_data['rythme_fixe']) > 0:
+                c2.metric("Fin estimée", str(d_est))
+                c3.metric("Rythme", f"{u_data['rythme_fixe']} p/s")
+            else:
+                c2.metric("Jours restants", j_rest)
+                c3.metric("Conseillé", f"{r_auto} p/s")
+
+            total_pages_objectif = 604 - p_cib
+            perc = min(100, max(0, int(((total_pages_objectif - p_rest) / total_pages_objectif) * 100))) if total_pages_objectif > 0 else 100
+            st.progress(perc / 100)
+            st.write(f"**{perc}%** atteint")
 
             st.divider()
-            st.subheader("🔍 Focus par membre")
-            users_focus = [u for u in all_users if u['username'] != 'admin']
-            
-            for user in users_focus:
-                with st.expander(f"👤 {user['username'].upper()} - Gestion détaillée"):
-                    p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(
-                        user['page_actuelle'], user['obj_hizb'], user['rythme_fixe'], user['date_cible']
-                    )
-                    
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Pages restantes", p_rest)
-                    m2.metric("Jours restants", j_rest)
-                    m3.metric("Rythme idéal", f"{r_auto} p/sem")
-                    
-                    total_p_obj = 604 - p_cib
-                    perc = min(100, max(0, int(((total_p_obj - p_rest) / total_p_obj) * 100))) if total_p_obj > 0 else 100
-                    st.progress(perc / 100)
-                    
-                    c_adm1, c_adm2 = st.columns(2)
-                    with c_adm1:
-                        adm_h = st.number_input("Hizb cible", 0, 60, int(user['obj_hizb']), key=f"h_{user['id']}")
-                        adm_d = st.date_input("Date cible", d_cib, key=f"d_{user['id']}")
-                        adm_r = st.number_input("Rythme fixe", 0.0, 100.0, float(user['rythme_fixe']), key=f"r_{user['id']}")
-                    with c_adm2:
-                        s_list = list(DATA_CORAN.keys())
-                        u_s = user['sourate'] if user['sourate'] in s_list else "An-Nas"
-                        adm_s = st.selectbox("Sourate", s_list, index=s_list.index(u_s), key=f"s_{user['id']}")
-                        p_deb, p_fin = DATA_CORAN[adm_s]
-                        adm_p_s = st.number_input(f"Page dans {adm_s}", 1, (p_fin-p_deb+1), 1, key=f"ps_{user['id']}")
-                        adm_p_reelle = p_fin - (adm_p_s - 1)
-                    
-                    if st.button(f"Mettre à jour {user['username']}", key=f"btn_{user['id']}", use_container_width=True):
-                        upd_indiv = {"page_actuelle": adm_p_reelle, "sourate": adm_s, "obj_hizb": adm_h, "date_cible": str(adm_d), "rythme_fixe": adm_r}
-                        supabase.table("users").update(upd_indiv).eq("id", user['id']).execute()
-                        st.success("Mis à jour !"); st.rerun()
+            colA, colB = st.columns(2)
+            with colA:
+                st.subheader("🎯 Objectifs")
+                n_hizb = st.number_input("Hizb visé", 0, 60, int(u_data['obj_hizb']))
+                n_date = st.date_input("Date cible", d_cib)
+                n_rythme = st.number_input("Pages/semaine", 0.0, 100.0, float(u_data['rythme_fixe']))
+            with colB:
+                st.subheader("📖 Mon étude")
+                s_list = list(DATA_CORAN.keys())
+                curr_s = u_data.get('sourate') or "An-Nas"
+                n_s = st.selectbox("Dernière sourate", s_list, index=s_list.index(curr_s))
+                p_deb, p_fin = DATA_CORAN[n_s]
+                p_dans_s = st.number_input(f"Page dans {n_s}", 1, (p_fin-p_deb+1), 1)
+                n_p_reelle = p_fin - (p_dans_s - 1)
 
-            st.divider()
-            st.subheader("🗑️ supprimer un membre")
-            u_to_del = st.selectbox("Choisir le compte à supprimer", [u['username'] for u in users_focus])
-            if st.button("CONFIRMER LA SUPPRESSION", type="primary"):
-                supabase.table("users").delete().eq("username", u_to_del).execute()
-                st.rerun()
+            if st.button("💾 Sauvegarder", use_container_width=True):
+                upd = {"page_actuelle": n_p_reelle, "sourate": n_s, "obj_hizb": n_hizb, "date_cible": str(n_date), "rythme_fixe": n_rythme}
+                supabase.table("users").update(upd).eq("id", st.session_state['user_id']).execute()
+                st.success("Mis à jour !"); st.rerun()
+
+        else:
+            # --- CODE ADMIN ---
+            st.title("🛠️ Administration")
+            res_all = supabase.table("users").select("*").execute()
+            all_users = res_all.data
+            
+            if all_users:
+                df_all = pd.DataFrame(all_users)
+                st.subheader("🚨 Données Maître")
+                edited_master = st.data_editor(df_all, hide_index=True, use_container_width=True, disabled=["id"])
+                
+                if st.button("🔥 SAUVEGARDER"):
+                    for _, row in edited_master.iterrows():
+                        payload = row.to_dict(); uid = payload.pop('id')
+                        supabase.table("users").update(payload).eq("id", uid).execute()
+                    st.success("Base à jour !"); st.rerun()
+
+                st.divider()
+                st.subheader("🔍 Focus par membre")
+                users_focus = [u for u in all_users if u['username'] != 'admin']
+                for user in users_focus:
+                    with st.expander(f"👤 {user['username'].upper()}"):
+                        p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(user['page_actuelle'], user['obj_hizb'], user['rythme_fixe'], user['date_cible'])
+                        st.write(f"Reste : {p_rest} pages | Idéal : {r_auto} p/sem")
+                        # (Possibilité de rajouter les inputs de modification ici si besoin)
+
+                st.divider()
+                st.subheader("🗑️ Supprimer un membre")
+                u_to_del = st.selectbox("Choisir", [u['username'] for u in users_focus], key="del_box")
+                if st.button("SUPPRIMER DÉFINITIVEMENT", type="primary"):
+                    supabase.table("users").delete().eq("username", u_to_del).execute()
+                    st.rerun()
