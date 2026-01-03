@@ -144,7 +144,7 @@ else:
             n_date = st.date_input("Date cible", d_cib)
             n_rythme = st.number_input("OU Pages/semaine", 0.0, 100.0, float(u_data['rythme_fixe']))
         with colB:
-            st.subheader("📖 Ma Lecture")
+            st.subheader("📖 Mon étude")
             s_list = list(DATA_CORAN.keys())
             curr_s = u_data.get('sourate') or "An-Nas"
             n_s = st.selectbox("Dernière sourate finie", s_list, index=s_list.index(curr_s))
@@ -159,7 +159,7 @@ else:
 
     # --- INTERFACE ADMIN ---
     else:
-        st.title("🛠️ Panneau Administrateur")
+        st.title("🛠️ Administration")
         
         # Récupération de TOUTES les données (Urgence)
         res_all = supabase.table("users").select("*").execute()
@@ -167,13 +167,13 @@ else:
         
         if all_users:
             df_all = pd.DataFrame(all_users)
-            st.subheader("🚨 Éditeur de Données Maître")
+            st.subheader("🚨 Données Maître")
             st.warning("Attention : Toute modification ici est critique.")
             
             # Éditeur maître (toutes les colonnes)
             edited_master = st.data_editor(df_all, hide_index=True, use_container_width=True, disabled=["id"])
             
-            if st.button("🔥 SAUVEGARDER LES MODIFICATIONS CRITIQUES", type="primary"):
+            if st.button("🔥 SAUVEGARDER LES MODIFICATIONS", type="primary"):
                 for _, row in edited_master.iterrows():
                     payload = row.to_dict()
                     uid = payload.pop('id')
@@ -219,7 +219,7 @@ else:
                         st.success("Mis à jour !"); st.rerun()
 
             st.divider()
-            st.subheader("🗑️ Zone de danger")
+            st.subheader("🗑️ supprimer un membre")
             u_to_del = st.selectbox("Choisir le compte à supprimer", [u['username'] for u in users_focus])
             if st.button("CONFIRMER LA SUPPRESSION", type="primary"):
                 supabase.table("users").delete().eq("username", u_to_del).execute()
