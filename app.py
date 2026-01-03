@@ -12,14 +12,30 @@ except Exception as e:
     st.error("Erreur de configuration : Vérifiez les Secrets Streamlit.")
     st.stop()
 
-# --- 2. CONFIGURATION STREAMLIT & PWA ---
+# --- 2. CONFIGURATION STREAMLIT & DESIGN ---
 st.set_page_config(page_title="HIKMA", layout="wide")
 
-# Injection du lien pour l'icône iPad/iPhone
-st.markdown(
-    f'<link rel="apple-touch-icon" href="logo.png">',
-    unsafe_allow_html=True
-)
+# Injection CSS pour l'immersion WhatsApp (Header vert et fond beige)
+st.markdown("""
+    <style>
+    header[data-testid="stHeader"] {
+        background-color: #075E54 !important;
+    }
+    .chat-header-custom {
+        background-color: #075E54;
+        color: white;
+        padding: 15px;
+        border-radius: 10px 10px 0 0;
+        margin-bottom: 10px;
+    }
+    [data-testid="stChatMessage"] {
+        border-radius: 15px !important;
+        padding: 10px !important;
+    }
+    /* Lien icône iPad/iPhone */
+    <link rel="apple-touch-icon" href="logo.png">
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- 3. INITIALISATION DES ÉTATS ---
 if 'logged_in' not in st.session_state:
@@ -28,7 +44,7 @@ if 'logged_in' not in st.session_state:
         'user': None, 
         'role': None, 
         'user_id': None,
-        'page': 'home'  # Gère la navigation entre Home et Chat
+        'page': 'home' 
     })
 
 # --- 4. DONNÉES SOURATES ---
@@ -58,7 +74,7 @@ DATA_CORAN = {
     "Al-Fajr": (593, 594), "Al-Balad": (594, 594), "Ash-Shams": (595, 595), "Al-Layl": (595, 596),
     "Ad-Duha": (596, 596), "Ash-Sharh": (596, 596), "At-Tin": (597, 597), "Al-Alaq": (597, 598),
     "Al-Qadr": (598, 598), "Al-Bayyina": (598, 599), "Az-Zalzala": (599, 599), "Al-Adiyat": (599, 600),
-    "Al-Qaria": (600, 600), "At-Talkathur": (600, 600), "Al-Asr": (601, 601), "Al-Humaza": (601, 601),
+    "Al-Qaria": (600, 600), "At-Takathur": (600, 600), "Al-Asr": (601, 601), "Al-Humaza": (601, 601),
     "Al-Fil": (601, 601), "Quraish": (602, 602), "Al-Maun": (602, 602), "Al-Kawthar": (602, 602),
     "Al-Kafirun": (603, 603), "An-Nasr": (603, 603), "Al-Masad": (603, 603), "Al-Ikhlas": (604, 604),
     "Al-Falaq": (604, 604), "An-Nas": (604, 604)
@@ -102,7 +118,7 @@ if not st.session_state['logged_in']:
             except: st.error("Pseudo déjà utilisé.")
 
 else:
-    # --- 7. SIDEBAR (NAVIGATION) ---
+    # --- 7. SIDEBAR ---
     st.sidebar.title(f"👤 {st.session_state['user']}")
     
     if st.sidebar.button("🏠 Ma Progression", use_container_width=True):
@@ -131,40 +147,45 @@ else:
 
     # --- 8. PAGE DISCUSSION (INTERFACE WHATSAPP) ---
     if st.session_state['page'] == 'chat':
-        st.title("💬 Messagerie Hikma")
+        # Header visuel style WhatsApp
+        st.markdown(f"""
+            <div class="chat-header-custom">
+                <strong>💬 Messagerie Hikma</strong><br>
+                <small>Mode : {st.session_state['role'].capitalize()}</small>
+            </div>
+            """, unsafe_allow_html=True)
         
         # Récupération des données utilisateurs
         all_users = supabase.table("users").select("id", "username", "role").execute().data
         admins = [u for u in all_users if u['role'] == 'admin']
         membres = [u for u in all_users if u['role'] == 'membre']
 
-        # Barre de sélection du destinataire
-        col_h1, col_h2 = st.columns([3, 1])
-        with col_h1:
+        # Sélection du destinataire
+        col_sel, col_act = st.columns([3, 1])
+        with col_sel:
             if st.session_state['role'] == 'admin':
                 selection = st.selectbox("Destinataire :", ["Groupe (Tous)"] + [u['username'] for u in membres])
                 target_id = None if selection == "Groupe (Tous)" else [u['id'] for u in membres if u['username'] == selection][0]
                 group_tag = "GROUPE_MEMBRES" if selection == "Groupe (Tous)" else None
             else:
-                selection = st.selectbox("Admin :", [u['username'] for u in admins])
+                selection = st.selectbox("Contacter un Admin :", [u['username'] for u in admins])
                 target_id = [u['id'] for u in admins if u['username'] == selection][0]
                 group_tag = None
-        with col_h2:
-            st.write("") # espacement
+        with col_act:
+            st.write("") # alignement
             if st.button("🔄 Actualiser", use_container_width=True): st.rerun()
 
         st.divider()
 
-        # Zone d'affichage des messages (Ordre chronologique comme WhatsApp)
-        chat_placeholder = st.container()
-        with chat_placeholder:
-            # On récupère les messages du plus ancien au plus récent
+        # Affichage des messages (Ordre chronologique ascendant)
+        chat_container = st.container()
+        with chat_container:
             query = supabase.table("messages").select("*").order("created_at", desc=False).execute()
             for m in query.data:
                 exp_name = next((u['username'] for u in all_users if u['id'] == m['sender_id']), "Inconnu")
                 is_me = m['sender_id'] == st.session_state['user_id']
                 
-                # Filtrage : l'admin voit tout, le membre voit ses privés + le groupe
+                # Logique de visibilité
                 visible = False
                 if st.session_state['role'] == 'admin': visible = True
                 elif is_me or m['receiver_id'] == st.session_state['user_id'] or m['group_name'] == "GROUPE_MEMBRES":
@@ -174,9 +195,9 @@ else:
                     with st.chat_message("user" if is_me else "assistant"):
                         st.markdown(f"**{exp_name}**")
                         st.write(m['content'])
-                        st.caption(f"{m['created_at'][11:16]}")
+                        st.caption(f"{m['created_at'][11:16]} {'✓✓' if is_me else ''}")
 
-        # Zone de saisie fixe en bas
+        # Zone de saisie fixe WhatsApp
         prompt = st.chat_input("Écrivez votre message...")
         if prompt:
             supabase.table("messages").insert({
@@ -234,10 +255,10 @@ else:
             # --- CODE ADMIN ---
             st.title("🛠️ Administration")
             res_all = supabase.table("users").select("*").execute()
-            all_users = res_all.data
+            all_users_admin = res_all.data
             
-            if all_users:
-                df_all = pd.DataFrame(all_users)
+            if all_users_admin:
+                df_all = pd.DataFrame(all_users_admin)
                 st.subheader("🚨 Données Maître")
                 edited_master = st.data_editor(df_all, hide_index=True, use_container_width=True, disabled=["id"])
                 
@@ -249,7 +270,7 @@ else:
 
                 st.divider()
                 st.subheader("🔍 Focus par membre")
-                users_focus = [u for u in all_users if u['username'] != 'admin']
+                users_focus = [u for u in all_users_admin if u['username'] != 'admin']
                 for user in users_focus:
                     with st.expander(f"👤 {user['username'].upper()}"):
                         p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(user['page_actuelle'], user['obj_hizb'], user['rythme_fixe'], user['date_cible'])
