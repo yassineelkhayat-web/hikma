@@ -13,7 +13,8 @@ except Exception as e:
     st.stop()
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="HIKMA - Suivi Coran", layout="wide")
+# Note : remplace "logo.png" par ton fichier ou une URL
+st.set_page_config(page_title="HIKMA - Suivi Coran", page_icon="logo.png", layout="wide")
 
 # --- DONNÉES SOURATES (114) ---
 DATA_CORAN = {
@@ -69,7 +70,12 @@ def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
 
 # --- AUTHENTIFICATION ---
 if not st.session_state['logged_in']:
-    st.title("📖 Hikma Bilan")
+    # Centrage du logo à la place du titre
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        # Assure-toi que "logo.png" est bien dans ton dossier GitHub
+        st.image("logo.png", use_container_width=True)
+    
     t1, t2 = st.tabs(["Connexion", "Inscription"])
     with t1:
         u = st.text_input("Pseudo", key="l1")
@@ -90,6 +96,8 @@ if not st.session_state['logged_in']:
 
 else:
     # --- BARRE LATÉRALE (SIDEBAR) ---
+    # On peut aussi remettre le logo en petit dans la barre latérale
+    st.sidebar.image("logo.png", width=100)
     st.sidebar.title(f"👤 {st.session_state['user']}")
     
     if st.session_state['role'] == 'admin':
@@ -182,7 +190,6 @@ else:
 
             st.divider()
             st.subheader("🔍 Focus par membre")
-            # On réutilise les données filtrées (sans l'admin principal si nécessaire) pour le focus
             users_focus = [u for u in all_users if u['username'] != 'admin']
             
             for user in users_focus:
