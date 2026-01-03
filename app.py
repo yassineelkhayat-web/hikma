@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 from datetime import date, datetime, timedelta
+import json
 
 # --- 1. CONFIGURATION SUPABASE ---
 try:
@@ -35,8 +36,15 @@ st.markdown("""
         max-width: 75% !important;
         font-size: 0.9rem !important;
     }
-    /* Lien icône iPad/iPhone */
-    <link rel="apple-touch-icon" href="logo.png">
+    /* Style pour les cartes de devoirs */
+    .devoir-card {
+        border-left: 5px solid #075E54;
+        background-color: #ffffff;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -132,14 +140,17 @@ else:
         st.session_state['page'] = 'chat'
         st.rerun()
 
+    if st.sidebar.button("📚 Devoir et Test", use_container_width=True):
+        st.session_state['page'] = 'devoirs'
+        st.rerun()
+
     st.sidebar.divider()
     
-    # --- GESTION DES CONTACTS (Le "Côté") ---
+    # --- GESTION DES CONTACTS DANS LA SIDEBAR (Chat seulement) ---
     if st.session_state['page'] == 'chat':
         st.sidebar.subheader("📇 Mes Contacts")
         all_users = supabase.table("users").select("id", "username", "role").execute().data
         
-        # Admin peut créer des groupes
         if st.session_state['role'] == 'admin':
             with st.sidebar.expander("➕ Créer un Groupe"):
                 g_name = st.text_input("Nom du groupe")
@@ -168,6 +179,7 @@ else:
 
     # --- 8. PAGE DISCUSSION (INTERFACE WHATSAPP) ---
     if st.session_state['page'] == 'chat':
+        all_users = supabase.table("users").select("id", "username", "role").execute().data
         target_label = st.session_state.get('selected_chat', 'Groupe Global')
         
         st.markdown(f"""
@@ -177,22 +189,22 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-        # Logique d'identification du destinataire
         group_tag = "GROUPE_MEMBRES" if target_label == "Groupe Global" else None
         target_id = None
         if not group_tag:
             target_user = next((u for u in all_users if u['username'] == target_label), None)
             target_id = target_user['id'] if target_user else None
 
-        # Affichage des messages
         chat_container = st.container(height=500)
         with chat_container:
             query = supabase.table("messages").select("*").order("created_at", desc=False).execute()
             for m in query.data:
+                # On ignore les messages qui sont des devoirs système sur cette page
+                if m.get('group_name') == "DEVOIR_SYSTEM": continue
+
                 is_me = m['sender_id'] == st.session_state['user_id']
                 sender_name = next((u['username'] for u in all_users if u['id'] == m['sender_id']), "Inconnu")
                 
-                # Filtrage strict de la discussion
                 show = False
                 if group_tag and m['group_name'] == group_tag:
                     show = True
@@ -207,7 +219,6 @@ else:
                         st.write(m['content'])
                         st.caption(f"{m['created_at'][11:16]} {'✓✓' if is_me else ''}")
 
-        # Zone de saisie
         prompt = st.chat_input(f"Envoyer à {target_label}...")
         if prompt:
             supabase.table("messages").insert({
@@ -218,10 +229,68 @@ else:
             }).execute()
             st.rerun()
 
+    # --- 10. PAGE DEVOIR ET TEST (NOUVEAU) ---
+    elif st.session_state['page'] == 'devoirs':
+        st.title("📚 Devoirs et Tests")
+        all_users = supabase.table("users").select("id", "username", "role").execute().data
+        membres = [u for u in all_users if u['role'] == 'membre']
+
+        if st.session_state['role'] == 'admin':
+            with st.expander("🆕 Assigner un Devoir/Test", expanded=True):
+                dest = st.selectbox("Pour qui ?", ["Tous"] + [u['username'] for u in membres])
+                sujet = st.text_input("Sujet du test / devoir")
+                c1, c2 = st.columns(2)
+                with c1:
+                    nb_p = st.number_input("Nombre de pages", 0, 604, 10)
+                with c2:
+                    nb_h = st.number_input("Nombre de Hizb", 0, 60, 1)
+                
+                instructions = st.text_area("Précisions (ex: Portera sur les 10 premières pages de Al-Baqara)")
+                
+                if st.button("Publier l'annonce"):
+                    t_id = None if dest == "Tous" else next(u['id'] for u in membres if u['username'] == dest)
+                    # On stocke les données structurées dans le contenu pour cet exemple
+                    payload = {
+                        "sujet": sujet,
+                        "pages": nb_p,
+                        "hizb": nb_h,
+                        "text": instructions,
+                        "date": str(date.today())
+                    }
+                    supabase.table("messages").insert({
+                        "sender_id": st.session_state['user_id'],
+                        "receiver_id": t_id,
+                        "group_name": "DEVOIR_SYSTEM",
+                        "content": json.dumps(payload)
+                    }).execute()
+                    st.success("Annonce publiée !"); st.rerun()
+
+        st.divider()
+        # Affichage des devoirs
+        res_dev = supabase.table("messages").select("*").eq("group_name", "DEVOIR_SYSTEM").order("created_at", desc=True).execute()
+        
+        for d in res_dev.data:
+            if d['receiver_id'] is None or d['receiver_id'] == st.session_state['user_id'] or st.session_state['role'] == 'admin':
+                try:
+                    info = json.loads(d['content'])
+                    with st.container():
+                        st.markdown(f"""
+                        <div class="devoir-card">
+                            <h4>📝 {info['sujet']}</h4>
+                            <p><b>Cible :</b> {info['pages']} pages | {info['hizb']} Hizb</p>
+                            <p><i>{info['text']}</i></p>
+                            <small>Publié le {info['date']}</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        if st.session_state['role'] == 'admin':
+                            if st.button("Supprimer", key=f"del_dev_{d['id']}"):
+                                supabase.table("messages").delete().eq("id", d['id']).execute()
+                                st.rerun()
+                except: continue
+
     # --- 9. PAGE PROGRESSION (HOME) ---
     else:
         if st.session_state['role'] != 'admin':
-            # (Le code de progression reste inchangé comme demandé)
             u_data = supabase.table("users").select("*").eq("id", st.session_state['user_id']).execute().data[0]
             p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(u_data['page_actuelle'], u_data['obj_hizb'], u_data['rythme_fixe'], u_data['date_cible'])
             
