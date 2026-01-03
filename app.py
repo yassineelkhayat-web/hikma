@@ -13,7 +13,6 @@ except Exception as e:
     st.stop()
 
 # --- CONFIGURATION STREAMLIT ---
-# Note : remplace "logo.png" par ton fichier ou une URL
 st.set_page_config(page_title="HIKMA - Suivi Coran", page_icon="logo.png", layout="wide")
 
 # --- DONNÉES SOURATES (114) ---
@@ -70,12 +69,13 @@ def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
 
 # --- AUTHENTIFICATION ---
 if not st.session_state['logged_in']:
-    # Centrage du logo à la place du titre
-    col1, col2, col3 = st.columns([1, 2, 1])
+    # Centrage du logo avec taille maîtrisée (200px)
+    col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
-        # Assure-toi que "logo.png" est bien dans ton dossier GitHub
-        st.image("logo.png", use_container_width=True)
+        st.image("logo.png", width=200)
     
+    st.write("") # Petit espace sous le logo
+
     t1, t2 = st.tabs(["Connexion", "Inscription"])
     with t1:
         u = st.text_input("Pseudo", key="l1")
@@ -96,7 +96,6 @@ if not st.session_state['logged_in']:
 
 else:
     # --- BARRE LATÉRALE (SIDEBAR) ---
-    # On peut aussi remettre le logo en petit dans la barre latérale
     st.sidebar.image("logo.png", width=100)
     st.sidebar.title(f"👤 {st.session_state['user']}")
     
@@ -168,8 +167,6 @@ else:
     # --- INTERFACE ADMIN ---
     else:
         st.title("🛠️ Administration")
-        
-        # Récupération de TOUTES les données (Urgence)
         res_all = supabase.table("users").select("*").execute()
         all_users = res_all.data
         
@@ -177,8 +174,6 @@ else:
             df_all = pd.DataFrame(all_users)
             st.subheader("🚨 Données Maître")
             st.warning("Attention : Toute modification ici est critique.")
-            
-            # Éditeur maître (toutes les colonnes)
             edited_master = st.data_editor(df_all, hide_index=True, use_container_width=True, disabled=["id"])
             
             if st.button("🔥 SAUVEGARDER LES MODIFICATIONS", type="primary"):
@@ -202,7 +197,7 @@ else:
                     m1.metric("Pages restantes", p_rest)
                     m2.metric("Jours restants", j_rest)
                     m3.metric("Rythme idéal", f"{r_auto} p/sem")
-
+                    
                     total_p_obj = 604 - p_cib
                     perc = min(100, max(0, int(((total_p_obj - p_rest) / total_p_obj) * 100))) if total_p_obj > 0 else 100
                     st.progress(perc / 100)
