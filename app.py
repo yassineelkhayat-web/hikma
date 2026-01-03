@@ -72,7 +72,7 @@ if not st.session_state['logged_in']:
     # Centrage du logo avec taille maîtrisée (200px)
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
-        st.image("logo.png", width=200)
+        st.image("logo.png", width=50)
     
     st.write("") # Petit espace sous le logo
 
