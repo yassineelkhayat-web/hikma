@@ -13,7 +13,14 @@ except Exception as e:
     st.stop()
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="HIKMA - Suivi Coran", layout="wide")
+st.set_page_config(page_title="HIKMA", layout="wide")
+
+# --- FORCE L'ICÔNE SUR IPAD/IPHONE ---
+# Ce code dit à l'iPad : "Utilise logo.png comme icône d'accueil"
+st.markdown(
+    f'<link rel="apple-touch-icon" href="logo.png">',
+    unsafe_allow_html=True
+)
 
 # --- DONNÉES SOURATES (114) ---
 DATA_CORAN = {
