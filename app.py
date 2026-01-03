@@ -8,13 +8,14 @@ try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except:
-    st.error("Erreur de Secrets Supabase.")
+except Exception as e:
+    st.error("Erreur de configuration : Vérifiez les Secrets Streamlit.")
     st.stop()
 
-st.set_page_config(page_title="HIKMA PRO", layout="wide")
+# --- CONFIGURATION STREAMLIT ---
+st.set_page_config(page_title="HIKMA - Suivi Coran", layout="wide")
 
-# --- DONNÉES SOURATES ---
+# --- DONNÉES SOURATES (114) ---
 DATA_CORAN = {
     "Al-Fatiha": (1, 1), "Al-Baqara": (2, 49), "Al-Imran": (50, 76), "An-Nisa": (77, 106),
     "Al-Maida": (106, 127), "Al-Anam": (128, 150), "Al-Araf": (151, 176), "Al-Anfal": (177, 186),
@@ -52,15 +53,22 @@ if 'logged_in' not in st.session_state:
 
 # --- FONCTION DE CALCUL ---
 def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
-    d_cible = datetime.strptime(d_cible_str, '%Y-%m-%d').date()
-    p_cible = 604 - (h_cible * 10)
-    p_restantes = max(0, p_actuelle - p_cible)
+    try:
+        d_cible = datetime.strptime(d_cible_str, '%Y-%m-%d').date()
+    except:
+        d_cible = date.today()
+    
+    p_cible = 604 - (int(h_cible) * 10)
+    p_restantes = max(0, int(p_actuelle) - p_cible)
     j_restants = max(0, (d_cible - date.today()).days)
+    
+    # Rythme auto (pages/semaine)
     rythme_auto = round((p_restantes / j_restants) * 7, 1) if j_restants > 0 else 0.0
     
+    # Date estimée si rythme fixe
     d_estimee = d_cible
-    if rythme_f > 0:
-        semaines_besoin = p_restantes / rythme_f
+    if float(rythme_f) > 0:
+        semaines_besoin = p_restantes / float(rythme_f)
         d_estimee = date.today() + timedelta(weeks=semaines_besoin)
     
     return p_restantes, j_restants, rythme_auto, d_estimee, d_cible
@@ -72,16 +80,19 @@ if not st.session_state['logged_in']:
     with t1:
         u = st.text_input("Pseudo", key="l1")
         p = st.text_input("MDP", type="password", key="l2")
-        if st.button("Se connecter"):
+        if st.button("Se connecter", use_container_width=True):
             res = supabase.table("users").select("*").eq("username", u).eq("password", p).execute()
             if res.data:
                 st.session_state.update({'logged_in': True, 'user': u, 'role': res.data[0]['role'], 'user_id': res.data[0]['id']})
                 st.rerun()
+            else: st.error("Identifiants incorrects.")
     with t2:
         nu, np = st.text_input("Pseudo", key="r1"), st.text_input("MDP", type="password", key="r2")
         if st.button("S'inscrire"):
-            supabase.table("users").insert({"username": nu, "password": np, "role": "membre"}).execute()
-            st.success("Compte créé !")
+            try:
+                supabase.table("users").insert({"username": nu, "password": np, "role": "membre"}).execute()
+                st.success("Compte créé ! Connectez-vous.")
+            except: st.error("Pseudo déjà utilisé.")
 
 else:
     st.sidebar.title(f"👤 {st.session_state['user']}")
@@ -95,7 +106,7 @@ else:
         st.title("🚀 Ma Progression")
         c1, c2, c3 = st.columns(3)
         c1.metric("Pages restantes", p_rest)
-        if u_data['rythme_fixe'] > 0:
+        if float(u_data['rythme_fixe']) > 0:
             c2.metric("Date fin estimée", str(d_est))
             c3.metric("Rythme fixé", f"{u_data['rythme_fixe']} p/sem")
         else:
@@ -106,76 +117,90 @@ else:
         colA, colB = st.columns(2)
         with colA:
             st.subheader("🎯 Objectifs")
-            mode = st.radio("Mode :", ["Hizb Cible", "Pages/Semaine"], key="m_u")
-            n_hizb = st.number_input("Hizb visé", 0, 60, u_data['obj_hizb'])
+            n_hizb = st.number_input("Hizb visé (0-60)", 0, 60, int(u_data['obj_hizb']))
             n_date = st.date_input("Date cible", d_cib)
-            n_rythme = st.number_input("Pages/semaine", 0.0, 70.0, u_data['rythme_fixe'])
+            n_rythme = st.number_input("OU Pages/semaine", 0.0, 100.0, float(u_data['rythme_fixe']))
         with colB:
             st.subheader("📖 Ma Lecture")
             s_list = list(DATA_CORAN.keys())
-            n_s = st.selectbox("Sourate finie", s_list, index=s_list.index(u_data['sourate'] or "An-Nas"))
+            curr_s = u_data.get('sourate') or "An-Nas"
+            n_s = st.selectbox("Dernière sourate finie", s_list, index=s_list.index(curr_s))
             p_deb, p_fin = DATA_CORAN[n_s]
             p_dans_s = st.number_input(f"Page lue dans {n_s}", 1, (p_fin-p_deb+1), 1)
             n_p_reelle = p_fin - (p_dans_s - 1)
 
-        if st.button("💾 Sauvegarder"):
+        if st.button("💾 Sauvegarder", use_container_width=True):
             upd = {"page_actuelle": n_p_reelle, "sourate": n_s, "obj_hizb": n_hizb, "date_cible": str(n_date), "rythme_fixe": n_rythme}
             supabase.table("users").update(upd).eq("id", st.session_state['user_id']).execute()
-            st.success("Enregistré !"); st.rerun()
+            st.success("Synchronisé !"); st.rerun()
 
     # --- INTERFACE ADMIN ---
     else:
         st.title("🛠️ Panneau Administrateur")
         users = supabase.table("users").select("*").neq("username", "admin").execute().data
+        
         if users:
             df = pd.DataFrame(users)
-            
-            # 1. TABLEAU GLOBAL (Édition rapide)
             st.subheader("📊 Vue d'ensemble")
-            edited_df = st.data_editor(df[["id", "username", "sourate", "page_actuelle", "obj_hizb", "rythme_fixe", "date_cible"]], 
-                                       hide_index=True, use_container_width=True)
-            if st.button("💾 Sauvegarder le tableau global"):
+            # Tableau global éditable
+            edited_df = st.data_editor(
+                df[["id", "username", "role", "sourate", "page_actuelle", "obj_hizb", "rythme_fixe", "date_cible"]], 
+                hide_index=True, use_container_width=True, disabled=["id", "username"]
+            )
+            if st.button("💾 Sauvegarder les modifications du tableau"):
                 for _, row in edited_df.iterrows():
-                    supabase.table("users").update({"sourate": row['sourate'], "page_actuelle": row['page_actuelle'], "obj_hizb": row['obj_hizb'], "rythme_fixe": row['rythme_fixe'], "date_cible": str(row['date_cible'])}).eq("id", row['id']).execute()
-                st.success("Cloud mis à jour !"); st.rerun()
+                    supabase.table("users").update({
+                        "role": row['role'], "sourate": row['sourate'], 
+                        "page_actuelle": int(row['page_actuelle']), "obj_hizb": int(row['obj_hizb']), 
+                        "rythme_fixe": float(row['rythme_fixe']), "date_cible": str(row['date_cible'])
+                    }).eq("id", row['id']).execute()
+                st.success("Modifications appliquées !"); st.rerun()
 
             st.divider()
 
-            # 2. FOCUS PAR MEMBRE (Tableau/Interface déployable)
-            st.subheader("🔍 Focus détaillé par membre")
+            # --- FOCUS PAR MEMBRE (DÉPLOYABLE) ---
+            st.subheader("🔍 Focus par membre")
             for user in users:
-                with st.expander(f"👤 {user['username']} - Détails & Calculs"):
-                    # Calculs temps réel pour ce membre
-                    p_rest, j_rest, r_auto, d_est, d_cib = calculer_metrics(user['page_actuelle'], user['obj_hizb'], user['rythme_fixe'], user['date_cible'])
+                with st.expander(f"👤 {user['username'].upper()} - Gestion détaillée"):
+                    # Calculs Metrics
+                    p_rest, j_rest, r_auto, d_est, d_cib = calculer_metrics(
+                        user['page_actuelle'], user['obj_hizb'], user['rythme_fixe'], user['date_cible']
+                    )
                     
-                    # Dashboard du membre
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Pages restantes", p_rest)
-                    c2.metric("Jours restants", j_rest)
-                    c3.metric("Rythme auto", f"{r_auto} p/sem")
+                    # Dashboard Individuel
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Pages restantes", p_rest)
+                    m2.metric("Jours restants", j_rest)
+                    m3.metric("Rythme idéal", f"{r_auto} p/sem")
                     
-                    # Interface identique au membre
-                    col_adm_a, col_adm_b = st.columns(2)
-                    with col_adm_a:
-                        st.write("**🎯 Objectifs**")
-                        adm_hizb = st.number_input(f"Hizb cible", 0, 60, user['obj_hizb'], key=f"h_{user['id']}")
-                        adm_date = st.date_input(f"Date cible", d_cib, key=f"d_{user['id']}")
-                        adm_rythme = st.number_input(f"Rythme fixe", 0.0, 70.0, user['rythme_fixe'], key=f"r_{user['id']}")
-                    with col_adm_b:
-                        st.write("**📖 Lecture**")
+                    # Formulaire de modification miroir
+                    c_adm1, c_adm2 = st.columns(2)
+                    with c_adm1:
+                        st.write("**🎯 Paramètres Objectifs**")
+                        adm_h = st.number_input("Hizb cible", 0, 60, int(user['obj_hizb']), key=f"h_{user['id']}")
+                        adm_d = st.date_input("Date cible", d_cib, key=f"d_{user['id']}")
+                        adm_r = st.number_input("Rythme fixe (p/sem)", 0.0, 100.0, float(user['rythme_fixe']), key=f"r_{user['id']}")
+                    with c_adm2:
+                        st.write("**📖 État de Lecture**")
                         s_list = list(DATA_CORAN.keys())
-                        adm_s = st.selectbox("Sourate", s_list, index=s_list.index(user['sourate'] or "An-Nas"), key=f"s_{user['id']}")
+                        u_s = user['sourate'] if user['sourate'] in s_list else "An-Nas"
+                        adm_s = st.selectbox("Sourate", s_list, index=s_list.index(u_s), key=f"s_{user['id']}")
                         p_deb, p_fin = DATA_CORAN[adm_s]
                         adm_p_s = st.number_input(f"Page dans {adm_s}", 1, (p_fin-p_deb+1), 1, key=f"ps_{user['id']}")
                         adm_p_reelle = p_fin - (adm_p_s - 1)
-
-                    if st.button(f"Mettre à jour {user['username']}", key=f"btn_{user['id']}"):
-                        upd = {"page_actuelle": adm_p_reelle, "sourate": adm_s, "obj_hizb": adm_hizb, "date_cible": str(adm_date), "rythme_fixe": adm_rythme}
-                        supabase.table("users").update(upd).eq("id", user['id']).execute()
-                        st.success(f"Données de {user['username']} mises à jour !"); st.rerun()
+                    
+                    if st.button(f"Mettre à jour {user['username']}", key=f"btn_{user['id']}", use_container_width=True):
+                        upd_indiv = {
+                            "page_actuelle": adm_p_reelle, "sourate": adm_s, 
+                            "obj_hizb": adm_h, "date_cible": str(adm_date), "rythme_fixe": adm_r
+                        }
+                        supabase.table("users").update(upd_indiv).eq("id", user['id']).execute()
+                        st.success("Mis à jour !"); st.rerun()
 
             st.divider()
-            if st.button("🗑️ Supprimer un membre"):
-                nom = st.selectbox("Qui ?", [u['username'] for u in users])
-                supabase.table("users").delete().eq("username", nom).execute()
-                st.rerun()
+            st.subheader("🗑️ Zone de danger")
+            if st.button("Supprimer un membre définitivement"):
+                u_to_del = st.selectbox("Choisir le compte à supprimer", [u['username'] for u in users])
+                if st.button("CONFIRMER LA SUPPRESSION"):
+                    supabase.table("users").delete().eq("username", u_to_del).execute()
+                    st.rerun()
