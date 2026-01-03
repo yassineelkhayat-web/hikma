@@ -8,12 +8,12 @@ try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except:
-    st.error("Erreur de configuration Cloud (Secrets).")
+except Exception as e:
+    st.error("Erreur de configuration : Vérifie les Secrets dans Streamlit.")
     st.stop()
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="HIKMA - Système Coranique", layout="wide")
+st.set_page_config(page_title="HIKMA - Cloud Data", layout="wide")
 
 # --- DONNÉES SOURATES (114) ---
 DATA_CORAN = {
@@ -53,121 +53,112 @@ if 'logged_in' not in st.session_state:
 
 # --- AUTHENTIFICATION ---
 if not st.session_state['logged_in']:
-    st.title("📖 Hikma - Gestion Coranique")
-    tab1, tab2 = st.tabs(["🔐 Connexion", "📝 S'inscrire"])
-    with tab1:
-        u = st.text_input("Pseudo")
-        p = st.text_input("Mot de passe", type="password")
+    st.title("📖 Système Hikma Cloud")
+    t1, t2 = st.tabs(["🔐 Connexion", "📝 Inscription"])
+    with t1:
+        u = st.text_input("Pseudo", key="login_username")
+        p = st.text_input("Mot de passe", type="password", key="login_password")
         if st.button("Se connecter", use_container_width=True):
-            res = supabase.table("users").select("*").eq("username", u).eq("password", p).execute()
-            if res.data:
-                st.session_state.update({'logged_in': True, 'user': u, 'role': res.data[0]['role'], 'user_id': res.data[0]['id']})
-                st.rerun()
-            else: st.error("Identifiants incorrects.")
-    with tab2:
-        nu, np = st.text_input("Pseudo choisi")
-        np_pass = st.text_input("Mot de passe choisi", type="password")
-        if st.button("Créer un compte"):
             try:
-                supabase.table("users").insert({"username": nu, "password": np_pass, "role": "membre"}).execute()
-                st.success("Compte créé avec succès !")
-            except: st.error("Erreur (Pseudo peut-être déjà pris)")
+                res = supabase.table("users").select("*").eq("username", u).eq("password", p).execute()
+                if res.data:
+                    u_info = res.data[0]
+                    st.session_state.update({'logged_in': True, 'user': u, 'role': u_info['role'], 'user_id': u_info['id']})
+                    st.rerun()
+                else: st.error("Identifiants incorrects.")
+            except Exception as e:
+                st.error("Erreur de base de données. Vérifie tes Secrets.")
+
+    with t2:
+        nu = st.text_input("Nouveau Pseudo", key="reg_username")
+        np = st.text_input("Nouveau Mot de passe", type="password", key="reg_password")
+        if st.button("S'inscrire"):
+            try:
+                supabase.table("users").insert({"username": nu, "password": np, "role": "membre"}).execute()
+                st.success("Inscription réussie ! Connecte-toi.")
+            except: st.error("Pseudo déjà utilisé.")
 
 else:
+    # --- NAVIGATION ---
     st.sidebar.title(f"👤 {st.session_state['user']}")
-    menu = "Administration" if st.session_state['role'] == 'admin' else "Mon Suivi"
+    page_view = "Admin" if st.session_state['role'] == 'admin' else "Suivi"
     if st.sidebar.button("🚪 Déconnexion"):
         st.session_state.clear(); st.rerun()
 
-    # --- MON SUIVI ---
-    if menu == "Mon Suivi":
-        st.title("🚀 Mon Suivi de Lecture")
+    # --- PAGE SUIVI ---
+    if page_view == "Suivi":
+        st.title("🚀 Ma Progression")
         res = supabase.table("users").select("*").eq("id", st.session_state['user_id']).execute()
         u_data = res.data[0]
         
-        # Calculs dynamiques
-        p_act = u_data['page_actuelle'] or 604
-        h_obj = u_data['obj_hizb'] or 0
+        p_act = u_data.get('page_actuelle') or 604
+        h_obj = u_data.get('obj_hizb') or 0
+        d_str = u_data.get('date_cible') or str(date.today())
+        
         p_cible = 604 - (h_obj * 10)
         p_restantes = max(0, p_act - p_cible)
-        
-        try:
-            d_cible = datetime.strptime(u_data['date_cible'], '%Y-%m-%d').date()
-            jours = (d_cible - date.today()).days
+        try: jours = (datetime.strptime(d_str, '%Y-%m-%d').date() - date.today()).days
         except: jours = 0
-        
-        hebdo = round((p_restantes / max(1, jours)) * 7, 1) if jours > 0 else 0.0
+        p_hebdo = round((p_restantes / max(1, jours)) * 7, 1) if jours > 0 else 0.0
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Pages à lire", p_restantes)
+        c1.metric("Pages restantes", p_restantes)
         c2.metric("Jours restants", max(0, jours))
-        c3.metric("Rythme idéal", f"{hebdo} p/sem")
+        c3.metric("Rythme idéal", f"{p_hebdo} p/sem")
 
         st.divider()
-        col_s, col_h = st.columns(2)
+        col1, col2 = st.columns(2)
         s_list = list(DATA_CORAN.keys())
-        curr_s = u_data['sourate'] or "An-Nas"
-        choix_s = col_s.selectbox("Sourate terminée", s_list, index=s_list.index(curr_s))
-        n_hizb = col_h.number_input("Changer mon Hizb Cible", 0, 60, h_obj)
+        sourate_act = u_data.get('sourate') or "An-Nas"
+        choix_s = col1.selectbox("Dernière Sourate finie", s_list, index=s_list.index(sourate_act))
+        n_hizb = col2.number_input("Mon Objectif (Hizb)", 0, 60, h_obj)
         
         p_deb, p_fin = DATA_CORAN[choix_s]
-        n_pages_s = p_fin - p_deb + 1
-        num_page = st.number_input(f"Dernière page lue dans {choix_s} (1 à {n_pages_s})", 1, n_pages_s, 1)
-        p_finale = p_fin - (num_page - 1)
+        num_p = st.number_input(f"Page lue dans {choix_s}", 1, (p_fin - p_deb + 1), 1)
+        p_calc = p_fin - (num_p - 1)
 
-        if st.button("💾 Sauvegarder", use_container_width=True):
-            supabase.table("users").update({"page_actuelle": p_finale, "sourate": choix_s, "obj_hizb": n_hizb}).eq("id", st.session_state['user_id']).execute()
-            supabase.table("history").insert({"username": st.session_state['user'], "date_enregistrement": str(date.today()), "page_atteinte": p_finale, "sourate_atteinte": choix_s}).execute()
-            st.success("Mise à jour réussie !"); st.rerun()
+        if st.button("💾 Enregistrer mes progrès"):
+            supabase.table("users").update({"page_actuelle": p_calc, "sourate": choix_s, "obj_hizb": n_hizb}).eq("id", st.session_state['user_id']).execute()
+            supabase.table("history").insert({"username": st.session_state['user'], "date_enregistrement": str(date.today()), "page_atteinte": p_calc, "sourate_atteinte": choix_s}).execute()
+            st.success("Synchronisé !"); st.rerun()
 
-    # --- ADMINISTRATION ---
-    elif menu == "Administration":
-        st.title("🛠️ Contrôle Admin")
-        t1, t2, t3 = st.tabs(["📊 Éditeur Rapide", "📅 Historique Global", "⚙️ Paramètres Avancés"])
+    # --- PAGE ADMIN ---
+    elif page_view == "Admin":
+        st.title("🛠️ Administration")
+        tab1, tab2, tab3 = st.tabs(["📝 Éditeur Rapide", "📅 Historique", "👤 Gestion"])
 
-        with t1:
+        with tab1:
             res = supabase.table("users").select("id, username, role, sourate, page_actuelle, obj_hizb").neq("username", "admin").execute()
-            df = pd.DataFrame(res.data)
-            if not df.empty:
+            if res.data:
+                df = pd.DataFrame(res.data)
                 df.columns = ["ID", "Pseudo", "Grade", "Sourate", "Page", "Hizb Cible"]
                 edited = st.data_editor(df, hide_index=True, disabled=["ID", "Pseudo"], use_container_width=True)
-                if st.button("💾 Appliquer les modifications"):
-                    for _, r in edited.iterrows():
+                if st.button("💾 Sauvegarder"):
+                    for _, row in edited.iterrows():
                         supabase.table("users").update({
-                            "role": r['Grade'], 
-                            "sourate": r['Sourate'], 
-                            "page_actuelle": r['Page'], 
-                            "obj_hizb": r['Hizb Cible']
-                        }).eq("id", r['ID']).execute()
-                    st.success("Cloud mis à jour !"); st.rerun()
-            else:
-                st.info("Aucun membre inscrit pour le moment.")
+                            "role": row['Grade'], "sourate": row['Sourate'], 
+                            "page_actuelle": row['Page'], "obj_hizb": row['Hizb Cible']
+                        }).eq("id", row['ID']).execute()
+                    st.success("Mis à jour !"); st.rerun()
 
-        with t2:
-            d_hist = st.date_input("Voir la position des membres au :", date.today())
-            res_h = supabase.table("history").select("*").lte("date_enregistrement", str(d_hist)).order("date_enregistrement", desc=True).execute()
+        with tab2:
+            check_date = st.date_input("Date :", date.today())
+            res_h = supabase.table("history").select("*").lte("date_enregistrement", str(check_date)).order("date_enregistrement", desc=True).execute()
             if res_h.data:
                 df_h = pd.DataFrame(res_h.data).drop_duplicates(subset=["username"])
                 st.dataframe(df_h[["username", "sourate_atteinte", "page_atteinte", "date_enregistrement"]], use_container_width=True)
-            else: st.info("Aucune donnée à cette date.")
 
-        with t3:
-            all_u = supabase.table("users").select("*").neq("username", "admin").execute()
-            for u in all_u.data:
-                with st.expander(f"👤 {u['username']}"):
+        with tab3:
+            res_u = supabase.table("users").select("*").neq("username", "admin").execute()
+            for u in res_u.data:
+                with st.expander(f"Membre : {u['username']}"):
                     with st.form(f"f_{u['id']}"):
-                        c1, c2 = st.columns(2)
-                        n_role = c1.selectbox("Grade", ["membre", "admin"], index=0 if u['role']=='membre' else 1)
-                        # Correction : gestion si la date_cible est vide dans la DB
-                        try:
-                            date_val = datetime.strptime(u['date_cible'], '%Y-%m-%d').date() if u.get('date_cible') else date.today()
-                        except:
-                            date_val = date.today()
-                            
-                        n_date = c2.date_input("Date Cible", value=date_val)
-                        if st.form_submit_button("Modifier"):
-                            supabase.table("users").update({"role": n_role, "date_cible": str(n_date)}).eq("id", u['id']).execute()
+                        new_role = st.checkbox("Admin", value=(u['role'] == 'admin'))
+                        curr_date = datetime.strptime(u['date_cible'], '%Y-%m-%d').date() if u.get('date_cible') else date.today()
+                        new_date = st.date_input("Date Cible", value=curr_date)
+                        if st.form_submit_button("Appliquer"):
+                            supabase.table("users").update({"role": "admin" if new_role else "membre", "date_cible": str(new_date)}).eq("id", u['id']).execute()
                             st.rerun()
-                    if st.button(f"🗑️ Supprimer {u['username']}", type="primary", key=f"del_{u['id']}"):
+                    if st.button(f"🗑️ Supprimer {u['username']}", key=f"del_{u['id']}"):
                         supabase.table("users").delete().eq("id", u['id']).execute()
                         st.rerun()
