@@ -13,7 +13,7 @@ except Exception as e:
     st.stop()
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="HIKMA - Suivi Coran", page_icon="logo.png", layout="wide")
+st.set_page_config(page_title="HIKMA - Suivi Coran", layout="wide")
 
 # --- DONNÉES SOURATES (114) ---
 DATA_CORAN = {
@@ -69,13 +69,7 @@ def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
 
 # --- AUTHENTIFICATION ---
 if not st.session_state['logged_in']:
-    # Centrage du logo avec taille maîtrisée (200px)
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        st.image("logo.png", width=50)
-    
-    st.write("") # Petit espace sous le logo
-
+    st.title("📖 Hikma Bilan")
     t1, t2 = st.tabs(["Connexion", "Inscription"])
     with t1:
         u = st.text_input("Pseudo", key="l1")
@@ -96,7 +90,6 @@ if not st.session_state['logged_in']:
 
 else:
     # --- BARRE LATÉRALE (SIDEBAR) ---
-    st.sidebar.image("logo.png", width=100)
     st.sidebar.title(f"👤 {st.session_state['user']}")
     
     if st.session_state['role'] == 'admin':
