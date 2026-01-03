@@ -131,7 +131,7 @@ if pourcentage >= 100:
     st.balloons()
     st.success("Félicitations ! Objectif atteint ! 🎉")
 
-        st.divider()
+    st.divider()
         colA, colB = st.columns(2)
         with colA:
             st.subheader("🎯 Objectifs")
