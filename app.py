@@ -113,6 +113,24 @@ else:
             c2.metric("Jours restants", j_rest)
             c3.metric("Rythme conseillé", f"{r_auto} p/sem")
 
+# --- BARRE DE PROGRESSION VISUELLE ---
+st.subheader("📊 Progression vers l'objectif")
+# Calcul du pourcentage : (Pages lues / Total à lire)
+# Note : On part de 604 (début) vers page_cible
+total_pages_objectif = 604 - p_cible
+if total_pages_objectif > 0:
+    pages_faites = total_pages_objectif - p_restantes
+    pourcentage = min(100, max(0, int((pages_faites / total_pages_objectif) * 100)))
+else:
+    pourcentage = 100
+
+st.progress(pourcentage / 100)
+st.write(f"**{pourcentage}%** de ton objectif atteint !")
+
+if pourcentage >= 100:
+    st.balloons()
+    st.success("Félicitations ! Objectif atteint ! 🎉")
+
         st.divider()
         colA, colB = st.columns(2)
         with colA:
