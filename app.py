@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 # --- CONFIGURATION SUPABASE ---
 try:
@@ -13,7 +13,7 @@ except Exception as e:
     st.stop()
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="HIKMA - Cloud Data", layout="wide")
+st.set_page_config(page_title="HIKMA - Suivi Coran", layout="wide")
 
 # --- DONNÉES SOURATES (114) ---
 DATA_CORAN = {
@@ -51,114 +51,93 @@ DATA_CORAN = {
 if 'logged_in' not in st.session_state:
     st.session_state.update({'logged_in': False, 'user': None, 'role': None, 'user_id': None})
 
-# --- AUTHENTIFICATION ---
+# --- CONNEXION / INSCRIPTION ---
 if not st.session_state['logged_in']:
-    st.title("📖 Système Hikma Cloud")
+    st.title("📖 Hikma - Suivi Collectif")
     t1, t2 = st.tabs(["🔐 Connexion", "📝 Inscription"])
     with t1:
-        u = st.text_input("Pseudo", key="login_username")
-        p = st.text_input("Mot de passe", type="password", key="login_password")
-        if st.button("Se connecter", use_container_width=True):
-            try:
-                res = supabase.table("users").select("*").eq("username", u).eq("password", p).execute()
-                if res.data:
-                    u_info = res.data[0]
-                    st.session_state.update({'logged_in': True, 'user': u, 'role': u_info['role'], 'user_id': u_info['id']})
-                    st.rerun()
-                else: st.error("Identifiants incorrects.")
-            except Exception as e:
-                st.error("Erreur de base de données. Vérifie tes Secrets.")
-
+        u = st.text_input("Pseudo", key="l_u")
+        p = st.text_input("Mot de passe", type="password", key="l_p")
+        if st.button("Entrer", use_container_width=True):
+            res = supabase.table("users").select("*").eq("username", u).eq("password", p).execute()
+            if res.data:
+                st.session_state.update({'logged_in': True, 'user': u, 'role': res.data[0]['role'], 'user_id': res.data[0]['id']})
+                st.rerun()
+            else: st.error("Erreur d'accès.")
     with t2:
-        nu = st.text_input("Nouveau Pseudo", key="reg_username")
-        np = st.text_input("Nouveau Mot de passe", type="password", key="reg_password")
-        if st.button("S'inscrire"):
+        nu, np = st.text_input("Nouveau Pseudo", key="r_u"), st.text_input("Nouveau Mot de passe", type="password", key="r_p")
+        if st.button("Créer mon compte"):
             try:
-                supabase.table("users").insert({"username": nu, "password": np, "role": "membre"}).execute()
-                st.success("Inscription réussie ! Connecte-toi.")
-            except: st.error("Pseudo déjà utilisé.")
+                supabase.table("users").insert({"username": nu, "password": np}).execute()
+                st.success("Compte créé !")
+            except: st.error("Pseudo déjà pris.")
 
 else:
-    # --- NAVIGATION ---
     st.sidebar.title(f"👤 {st.session_state['user']}")
-    page_view = "Admin" if st.session_state['role'] == 'admin' else "Suivi"
-    if st.sidebar.button("🚪 Déconnexion"):
+    if st.sidebar.button("Déconnexion"):
         st.session_state.clear(); st.rerun()
 
-    # --- PAGE SUIVI ---
-    if page_view == "Suivi":
-        st.title("🚀 Ma Progression")
-        res = supabase.table("users").select("*").eq("id", st.session_state['user_id']).execute()
-        u_data = res.data[0]
+    # --- MODE MEMBRE ---
+    if st.session_state['role'] != 'admin':
+        st.title("🚀 Mon Suivi Personnel")
+        u_data = supabase.table("users").select("*").eq("id", st.session_state['user_id']).execute().data[0]
         
-        p_act = u_data.get('page_actuelle') or 604
-        h_obj = u_data.get('obj_hizb') or 0
-        d_str = u_data.get('date_cible') or str(date.today())
+        # 1. PARAMÈTRES D'OBJECTIF
+        st.subheader("🎯 Mon Objectif")
+        col_obj1, col_obj2 = st.columns(2)
         
-        p_cible = 604 - (h_obj * 10)
-        p_restantes = max(0, p_act - p_cible)
-        try: jours = (datetime.strptime(d_str, '%Y-%m-%d').date() - date.today()).days
-        except: jours = 0
-        p_hebdo = round((p_restantes / max(1, jours)) * 7, 1) if jours > 0 else 0.0
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Pages restantes", p_restantes)
-        c2.metric("Jours restants", max(0, jours))
-        c3.metric("Rythme idéal", f"{p_hebdo} p/sem")
+        mode = col_obj1.radio("Calculer par :", ["Hizb cible", "Pages par semaine"])
+        
+        if mode == "Hizb cible":
+            h_obj = col_obj2.number_input("Hizb à atteindre (ex: 60)", 0, 60, int(u_data.get('obj_hizb') or 60))
+            d_cible = st.date_input("Pour quelle date ?", value=datetime.strptime(u_data.get('date_cible') or str(date.today()), '%Y-%m-%d').date())
+            rythme = 0.0
+        else:
+            rythme = col_obj2.number_input("Pages par semaine", 0.1, 70.0, float(u_data.get('rythme_fixe') or 5.0))
+            h_obj = int(u_data.get('obj_hizb') or 60)
+            d_cible = date.today() # Sera ignoré car calculé par le rythme
 
         st.divider()
-        col1, col2 = st.columns(2)
+
+        # 2. DERNIÈRE LECTURE
+        st.subheader("📖 Ma Progression Actuelle")
+        c1, c2 = st.columns(2)
         s_list = list(DATA_CORAN.keys())
-        sourate_act = u_data.get('sourate') or "An-Nas"
-        choix_s = col1.selectbox("Dernière Sourate finie", s_list, index=s_list.index(sourate_act))
-        n_hizb = col2.number_input("Mon Objectif (Hizb)", 0, 60, h_obj)
+        s_act = c1.selectbox("Dernière Sourate finie", s_list, index=s_list.index(u_data.get('sourate') or "An-Nas"))
         
-        p_deb, p_fin = DATA_CORAN[choix_s]
-        num_p = st.number_input(f"Page lue dans {choix_s}", 1, (p_fin - p_deb + 1), 1)
-        p_calc = p_fin - (num_p - 1)
+        p_deb, p_fin = DATA_CORAN[s_act]
+        p_dans_s = c2.number_input(f"Page lue dans {s_act}", 1, (p_fin - p_deb + 1), 1)
+        p_reelle = p_fin - (p_dans_s - 1)
 
-        if st.button("💾 Enregistrer mes progrès"):
-            supabase.table("users").update({"page_actuelle": p_calc, "sourate": choix_s, "obj_hizb": n_hizb}).eq("id", st.session_state['user_id']).execute()
-            supabase.table("history").insert({"username": st.session_state['user'], "date_enregistrement": str(date.today()), "page_atteinte": p_calc, "sourate_atteinte": choix_s}).execute()
-            st.success("Synchronisé !"); st.rerun()
+        if st.button("💾 Enregistrer mes modifications", use_container_width=True):
+            upd = {
+                "page_actuelle": p_reelle, 
+                "sourate": s_act, 
+                "obj_hizb": h_obj, 
+                "date_cible": str(d_cible),
+                "rythme_fixe": rythme
+            }
+            supabase.table("users").update(upd).eq("id", st.session_state['user_id']).execute()
+            supabase.table("history").insert({"username": st.session_state['user'], "date_enregistrement": str(date.today()), "page_atteinte": p_reelle, "sourate_atteinte": s_act}).execute()
+            st.success("Données sauvegardées !"); st.rerun()
 
-    # --- PAGE ADMIN ---
-    elif page_view == "Admin":
-        st.title("🛠️ Administration")
-        tab1, tab2, tab3 = st.tabs(["📝 Éditeur Rapide", "📅 Historique", "👤 Gestion"])
-
-        with tab1:
-            res = supabase.table("users").select("id, username, role, sourate, page_actuelle, obj_hizb").neq("username", "admin").execute()
-            if res.data:
-                df = pd.DataFrame(res.data)
-                df.columns = ["ID", "Pseudo", "Grade", "Sourate", "Page", "Hizb Cible"]
-                edited = st.data_editor(df, hide_index=True, disabled=["ID", "Pseudo"], use_container_width=True)
-                if st.button("💾 Sauvegarder"):
-                    for _, row in edited.iterrows():
-                        supabase.table("users").update({
-                            "role": row['Grade'], "sourate": row['Sourate'], 
-                            "page_actuelle": row['Page'], "obj_hizb": row['Hizb Cible']
-                        }).eq("id", row['ID']).execute()
-                    st.success("Mis à jour !"); st.rerun()
-
-        with tab2:
-            check_date = st.date_input("Date :", date.today())
-            res_h = supabase.table("history").select("*").lte("date_enregistrement", str(check_date)).order("date_enregistrement", desc=True).execute()
-            if res_h.data:
-                df_h = pd.DataFrame(res_h.data).drop_duplicates(subset=["username"])
-                st.dataframe(df_h[["username", "sourate_atteinte", "page_atteinte", "date_enregistrement"]], use_container_width=True)
-
-        with tab3:
-            res_u = supabase.table("users").select("*").neq("username", "admin").execute()
-            for u in res_u.data:
-                with st.expander(f"Membre : {u['username']}"):
-                    with st.form(f"f_{u['id']}"):
-                        new_role = st.checkbox("Admin", value=(u['role'] == 'admin'))
-                        curr_date = datetime.strptime(u['date_cible'], '%Y-%m-%d').date() if u.get('date_cible') else date.today()
-                        new_date = st.date_input("Date Cible", value=curr_date)
-                        if st.form_submit_button("Appliquer"):
-                            supabase.table("users").update({"role": "admin" if new_role else "membre", "date_cible": str(new_date)}).eq("id", u['id']).execute()
-                            st.rerun()
-                    if st.button(f"🗑️ Supprimer {u['username']}", key=f"del_{u['id']}"):
-                        supabase.table("users").delete().eq("id", u['id']).execute()
-                        st.rerun()
+    # --- MODE ADMIN ---
+    else:
+        st.title("🛠️ Gestion du Groupe")
+        res = supabase.table("users").select("*").neq("username", "admin").execute()
+        if res.data:
+            df = pd.DataFrame(res.data)
+            # On permet à l'admin de tout modifier via le tableau
+            st.write("Modifiez les valeurs directement dans le tableau :")
+            edited_df = st.data_editor(df[["id", "username", "sourate", "page_actuelle", "obj_hizb", "rythme_fixe", "date_cible"]], hide_index=True, use_container_width=True)
+            
+            if st.button("💾 Sauvegarder les changements globaux"):
+                for _, row in edited_df.iterrows():
+                    supabase.table("users").update({
+                        "sourate": row['sourate'],
+                        "page_actuelle": row['page_actuelle'],
+                        "obj_hizb": row['obj_hizb'],
+                        "rythme_fixe": row['rythme_fixe'],
+                        "date_cible": str(row['date_cible'])
+                    }).eq("id", row['id']).execute()
+                st.success("Base de données mise à jour !"); st.rerun()
