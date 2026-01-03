@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import date, datetime
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="HIKMA - Suivi Coran Premium", layout="wide")
+st.set_page_config(page_title="HIKMA - Administration Directe", layout="wide")
 
 # --- DONNÉES SOURATES (114) ---
 DATA_CORAN = {
@@ -86,9 +86,10 @@ if not st.session_state['logged_in']:
 
 else:
     st.sidebar.title(f"👤 {st.session_state['user']}")
-    # Menu latéral pour l'admin pour basculer entre sa vue perso et l'admin
+    
+    # --- LOGIQUE DE RESTRICTION ---
     if st.session_state['role'] == 'admin':
-        page = st.sidebar.radio("Navigation", ["Mon Suivi", "Administration"])
+        page = "Administration" # Forcé pour l'admin
     else:
         page = "Mon Suivi"
 
@@ -97,7 +98,7 @@ else:
 
     conn = get_connection()
 
-    # --- MON SUIVI (MEMBRE & ADMIN PERSO) ---
+    # --- MON SUIVI (MEMBRE UNIQUEMENT) ---
     if page == "Mon Suivi":
         st.title("🚀 Ma Progression")
         row = conn.execute("SELECT page_actuelle, sourate, obj_hizb, date_cible, pages_par_semaine_fixe FROM users WHERE id=?", (st.session_state['user_id'],)).fetchone()
@@ -131,44 +132,47 @@ else:
         else:
             page_calculee = p_deb
 
-        st.info(f"📍 Position actuelle : Page {page_calculee}")
-
-        with st.expander("🎯 Mes Objectifs personnels"):
-            nh = st.number_input("Hizb Cible", value=int(h_obj))
-            nsem = st.number_input("Rythme Fixe (p/semaine)", value=float(p_sem_fixe))
-            nd = st.date_input("Date Cible", value=datetime.strptime(d_str, '%Y-%m-%d').date())
-
         if st.button("💾 Enregistrer mes progrès", use_container_width=True):
-            conn.execute("UPDATE users SET page_actuelle=?, sourate=?, obj_hizb=?, date_cible=?, pages_par_semaine_fixe=? WHERE id=?", 
-                         (page_calculee, choix_s, nh, str(nd), nsem, st.session_state['user_id']))
+            conn.execute("UPDATE users SET page_actuelle=?, sourate=? WHERE id=?", (page_calculee, choix_s, st.session_state['user_id']))
             conn.execute("INSERT INTO history (username, date_enregistrement, page_atteinte, sourate_atteinte) VALUES (?,?,?,?)",
                          (st.session_state['user'], str(date.today()), page_calculee, choix_s))
             conn.commit(); st.success("Progression sauvegardée !"); st.rerun()
 
-    # --- ADMINISTRATION (ONGLETS COMPLETS) ---
+    # --- ADMINISTRATION (ADMIN UNIQUEMENT) ---
     elif page == "Administration":
         st.title("🛠️ Panneau de Contrôle Admin")
-        t_dash, t_hist, t_users = st.tabs(["📊 Tableau de Bord", "📅 Historique par Date", "⚙️ Gestion des Comptes"])
+        t_dash, t_hist, t_users = st.tabs(["📊 Tableau de Bord (Éditeur)", "📅 Historique par Date", "⚙️ Gestion Individuelle"])
 
         with t_dash:
-            st.subheader("Vue d'ensemble des membres")
-            df_dash = pd.read_sql_query("""
-                SELECT u.username as Pseudo, u.role as Grade, u.sourate as Sourate, 
-                u.page_actuelle as Page, MAX(h.date_enregistrement) as 'Dernier Log'
-                FROM users u LEFT JOIN history h ON u.username = h.username
-                WHERE u.role != 'admin' GROUP BY u.username
+            st.subheader("Modifier directement les données des membres")
+            # Charger les données éditables
+            df_edit = pd.read_sql_query("""
+                SELECT id, username as Pseudo, role as Grade, sourate as Sourate, 
+                page_actuelle as Page, obj_hizb as 'Hizb Cible'
+                FROM users WHERE role != 'admin'
             """, conn)
-            st.dataframe(df_dash, use_container_width=True)
             
+            # Utilisation de st.data_editor pour permettre la modification directe
+            edited_df = st.data_editor(df_edit, key="main_editor", use_container_width=True, hide_index=True,
+                                      disabled=["id", "Pseudo"]) # On ne change pas l'ID ni le Pseudo ici
+
+            if st.button("💾 Sauvegarder toutes les modifications du tableau"):
+                for index, row in edited_df.iterrows():
+                    conn.execute("""UPDATE users SET role=?, sourate=?, page_actuelle=?, obj_hizb=? 
+                                    WHERE id=?""", (row['Grade'], row['Sourate'], row['Page'], row['Hizb Cible'], row['id']))
+                conn.commit()
+                st.success("Toutes les données du tableau ont été mises à jour !")
+                st.rerun()
+
             st.divider()
-            csv = df_dash.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Exporter la sauvegarde (CSV)", csv, "hikma_backup.csv", "text/csv")
+            csv = edited_df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Télécharger la sauvegarde CSV", csv, "hikma_backup.csv", "text/csv")
 
         with t_hist:
             st.subheader("Vérifier les positions à une date précise")
             d_recherche = st.date_input("Date à consulter", value=date.today())
             q_hist = f"""
-                SELECT h.username, h.sourate_atteinte, h.page_atteinte, h.date_enregistrement
+                SELECT h.username as Pseudo, h.sourate_atteinte as Sourate, h.page_atteinte as Page, h.date_enregistrement as Date
                 FROM history h
                 INNER JOIN (
                     SELECT username, MAX(date_enregistrement) as MD FROM history
@@ -176,31 +180,27 @@ else:
                 ) latest ON h.username = latest.username AND h.date_enregistrement = latest.MD
             """
             df_h = pd.read_sql_query(q_hist, conn)
-            st.table(df_h) if not df_h.empty else st.warning("Pas de logs à cette date.")
+            if not df_h.empty:
+                st.table(df_h)
+            else:
+                st.warning("Pas de logs à cette date.")
 
         with t_users:
-            st.subheader("Modifier les membres")
+            # On garde l'expander pour les réglages plus fins (dates cibles, suppression)
             all_users = conn.execute("SELECT * FROM users WHERE id != 1").fetchall()
             for u in all_users:
-                with st.expander(f"👤 Compte : {u[1]} (Grade: {u[3]})"):
+                with st.expander(f"👤 Paramètres avancés de {u[1]}"):
                     with st.form(f"f_adm_{u[0]}"):
                         c1, c2 = st.columns(2)
-                        n_role = c1.selectbox("Grade", ["membre", "admin"], index=0 if u[3]=='membre' else 1)
-                        n_page = c2.number_input("Page Coran", value=u[4] or 604)
-                        n_sour = st.selectbox("Sourate", list(DATA_CORAN.keys()), index=list(DATA_CORAN.keys()).index(u[5]) if u[5] in DATA_CORAN else 0)
-                        n_hizb = c1.number_input("Hizb Cible", value=u[6] or 0)
-                        n_rate = c2.number_input("Rythme p/sem", value=u[8] or 0.0)
-                        try: n_date = datetime.strptime(u[7], '%Y-%m-%d').date() if u[7] else date.today()
-                        except: n_date = date.today()
-                        n_d_cible = st.date_input("Date Cible", value=n_date)
-                        
-                        if st.form_submit_button("💾 Valider les modifications"):
-                            conn.execute("""UPDATE users SET role=?, page_actuelle=?, sourate=?, 
-                                            obj_hizb=?, pages_par_semaine_fixe=?, date_cible=? WHERE id=?""", 
-                                         (n_role, n_page, n_sour, n_hizb, n_rate, str(n_d_cible), u[0]))
+                        n_rate = c1.number_input("Rythme fixe p/sem", value=u[8] or 0.0)
+                        try: n_date_val = datetime.strptime(u[7], '%Y-%m-%d').date() if u[7] else date.today()
+                        except: n_date_val = date.today()
+                        n_d_cible = c2.date_input("Date Cible", value=n_date_val)
+                        if st.form_submit_button("Sauvegarder Rythme/Date"):
+                            conn.execute("UPDATE users SET pages_par_semaine_fixe=?, date_cible=? WHERE id=?", (n_rate, str(n_d_cible), u[0]))
                             conn.commit(); st.rerun()
                     
-                    if st.button(f"🗑️ Supprimer {u[1]}", key=f"del_u_{u[0]}", type="primary"):
+                    if st.button(f"🗑️ Supprimer définitivement {u[1]}", key=f"del_u_{u[0]}", type="primary"):
                         conn.execute("DELETE FROM users WHERE id=?", (u[0],))
                         conn.commit(); st.rerun()
 
