@@ -87,12 +87,7 @@ if not st.session_state['logged_in']:
 
 else:
     st.sidebar.title(f"👤 {st.session_state['user']}")
-    
-    if st.session_state['role'] == 'admin':
-        page = "Administration"
-    else:
-        page = "Mon Suivi"
-
+    page = "Administration" if st.session_state['role'] == 'admin' else "Mon Suivi"
     if st.sidebar.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.clear(); st.rerun()
 
@@ -102,15 +97,10 @@ else:
     if page == "Mon Suivi":
         st.title("🚀 Ma Progression")
         row = conn.execute("SELECT page_actuelle, sourate, obj_hizb, date_cible, pages_par_semaine_fixe FROM users WHERE id=?", (st.session_state['user_id'],)).fetchone()
-        
-        p_act = row[0] or 604
-        h_obj = row[2] or 0
-        d_str = row[3] or str(date.today())
-        p_sem_fixe = row[4] or 0.0
+        p_act, sourate_act, h_obj, d_str, p_sem_fixe = row[0] or 604, row[1], row[2] or 0, row[3] or str(date.today()), row[4] or 0.0
 
         p_cible = 604 - (h_obj * 10)
         p_restantes = max(0, p_act - p_cible)
-        
         try: jours = (datetime.strptime(d_str, '%Y-%m-%d').date() - date.today()).days
         except: jours = 0
         p_hebdo_dyn = round((p_restantes / max(1, jours)) * 7, 1) if jours > 0 else 0.0
@@ -121,81 +111,71 @@ else:
         c3.metric("Rythme (dyn)", f"{p_hebdo_dyn} p/sem")
 
         st.divider()
+        col_s, col_h = st.columns(2)
         s_list = list(DATA_CORAN.keys())
-        choix_s = st.selectbox("Sourate terminée", s_list, index=s_list.index(row[1]) if row[1] in s_list else 0)
+        choix_s = col_s.selectbox("Sourate terminée", s_list, index=s_list.index(sourate_act) if sourate_act in s_list else 0)
+        # NOUVEAU : Choix du Hizb Cible par l'utilisateur
+        n_hizb_user = col_h.number_input("Mon Objectif (Hizb)", 0, 60, h_obj)
+        
         p_deb, p_fin = DATA_CORAN[choix_s]
         nb_p_sourate = p_fin - p_deb + 1
         
         if nb_p_sourate > 1:
             num_p = st.number_input(f"Dernière page lue dans {choix_s}", 1, nb_p_sourate, 1)
             page_calculee = p_fin - (num_p - 1)
-        else:
-            page_calculee = p_deb
+        else: page_calculee = p_deb
 
-        if st.button("💾 Enregistrer mes progrès", use_container_width=True):
-            conn.execute("UPDATE users SET page_actuelle=?, sourate=? WHERE id=?", (page_calculee, choix_s, st.session_state['user_id']))
-            conn.execute("INSERT INTO history (username, date_enregistrement, page_atteinte, sourate_atteinte) VALUES (?,?,?,?)",
-                         (st.session_state['user'], str(date.today()), page_calculee, choix_s))
-            conn.commit(); st.success("Progression sauvegardée !"); st.rerun()
+        if st.button("💾 Enregistrer mes progrès et objectif", use_container_width=True):
+            conn.execute("UPDATE users SET page_actuelle=?, sourate=?, obj_hizb=? WHERE id=?", (page_calculee, choix_s, n_hizb_user, st.session_state['user_id']))
+            conn.execute("INSERT INTO history (username, date_enregistrement, page_atteinte, sourate_atteinte) VALUES (?,?,?,?)", (st.session_state['user'], str(date.today()), page_calculee, choix_s))
+            conn.commit(); st.success("Sauvegardé !"); st.rerun()
 
     # --- ADMINISTRATION ---
     elif page == "Administration":
-        st.title("🛠️ Panneau de Contrôle Admin")
-        t_dash, t_hist, t_users = st.tabs(["📊 Tableau de Bord (Éditeur)", "📅 Historique par Date", "⚙️ Gestion Individuelle"])
+        st.title("🛠️ Panneau Admin")
+        t_dash, t_hist, t_users = st.tabs(["📊 Éditeur Rapide", "📅 Historique", "⚙️ Gestion & Import"])
 
         with t_dash:
-            st.subheader("Modifier directement les données")
-            df_edit = pd.read_sql_query("SELECT id, username as Pseudo, role as Grade, sourate as Sourate, page_actuelle as Page, obj_hizb as 'Hizb Cible' FROM users WHERE role != 'admin'", conn)
+            df_edit = pd.read_sql_query("SELECT id, username as Pseudo, role as Grade, sourate as Sourate, page_actuelle as Page, obj_hizb as 'Hizb Cible' FROM users WHERE id != 1", conn)
             edited_df = st.data_editor(df_edit, key="main_editor", use_container_width=True, hide_index=True, disabled=["id", "Pseudo"])
-
-            if st.button("💾 Sauvegarder les modifications du tableau"):
-                for index, row in edited_df.iterrows():
-                    conn.execute("UPDATE users SET role=?, sourate=?, page_actuelle=?, obj_hizb=? WHERE id=?", (row['Grade'], row['Sourate'], row['Page'], row['Hizb Cible'], row['id']))
-                conn.commit(); st.success("Données mises à jour !"); st.rerun()
+            if st.button("💾 Sauvegarder le tableau"):
+                for _, r in edited_df.iterrows():
+                    conn.execute("UPDATE users SET role=?, sourate=?, page_actuelle=?, obj_hizb=? WHERE id=?", (r['Grade'], r['Sourate'], r['Page'], r['Hizb Cible'], r['id']))
+                conn.commit(); st.success("Mis à jour !"); st.rerun()
+            csv = edited_df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Télécharger CSV", csv, "hikma_backup.csv", "text/csv")
 
         with t_hist:
-            st.subheader("Positions historiques")
-            d_recherche = st.date_input("Date à consulter", value=date.today())
+            d_recherche = st.date_input("Date", value=date.today())
             q_hist = f"SELECT h.username as Pseudo, h.sourate_atteinte as Sourate, h.page_atteinte as Page FROM history h INNER JOIN (SELECT username, MAX(date_enregistrement) as MD FROM history WHERE date_enregistrement <= '{d_recherche}' GROUP BY username) latest ON h.username = latest.username AND h.date_enregistrement = latest.MD"
             df_h = pd.read_sql_query(q_hist, conn)
-            st.table(df_h) if not df_h.empty else st.warning("Pas de logs.")
+            st.table(df_h) if not df_h.empty else st.warning("Rien à cette date.")
 
         with t_users:
-            st.subheader("Outils de secours et Grades")
-            
-            # --- NOUVELLE FONCTIONNALITÉ D'IMPORTATION ---
             with st.expander("📥 Importation de secours (GitHub)"):
-                st.write("Si vous avez un fichier `import_membres.csv` sur votre GitHub, vous pouvez restaurer les données ici.")
                 if st.button("🚀 Synchroniser depuis GitHub"):
                     if os.path.exists("import_membres.csv"):
                         try:
                             imp_df = pd.read_csv("import_membres.csv")
                             for _, r in imp_df.iterrows():
-                                # On insère l'utilisateur s'il n'existe pas, sinon on met à jour
-                                conn.execute("""INSERT OR REPLACE INTO users (username, role, sourate, page_actuelle, obj_hizb) 
-                                                VALUES (?, ?, ?, ?, ?)""", (r['Pseudo'], r['Grade'], r['Sourate'], r['Page'], r['Hizb Cible']))
-                            conn.commit()
-                            st.success("Synchronisation réussie ! Les membres ont été restaurés.")
-                            st.rerun()
+                                conn.execute("INSERT OR REPLACE INTO users (username, role, sourate, page_actuelle, obj_hizb) VALUES (?, ?, ?, ?, ?)", (r['Pseudo'], r['Grade'], r['Sourate'], r['Page'], r['Hizb Cible']))
+                            conn.commit(); st.success("Restauré !"); st.rerun()
                         except Exception as e: st.error(f"Erreur : {e}")
-                    else: st.warning("Le fichier 'import_membres.csv' n'a pas été trouvé sur GitHub.")
-
+                    else: st.warning("Fichier 'import_membres.csv' introuvable.")
+            
             st.divider()
-            all_users = conn.execute("SELECT * FROM users WHERE id != 1").fetchall()
-            for u in all_users:
-                with st.expander(f"👤 {u[1]} (Grade: {u[3]})"):
-                    with st.form(f"f_adm_{u[0]}"):
+            all_u = conn.execute("SELECT * FROM users WHERE id != 1").fetchall()
+            for u in all_u:
+                with st.expander(f"👤 {u[1]} (Hizb Cible: {u[6]})"):
+                    with st.form(f"form_{u[0]}"):
                         is_admin = st.checkbox("Définir comme Administrateur", value=(u[3] == "admin"))
-                        c1, c2 = st.columns(2)
-                        n_rate = c1.number_input("Rythme fixe p/sem", value=u[8] or 0.0)
-                        try: n_date_val = datetime.strptime(u[7], '%Y-%m-%d').date() if u[7] else date.today()
-                        except: n_date_val = date.today()
-                        n_d_cible = c2.date_input("Date Cible", value=n_date_val)
-                        if st.form_submit_button("✅ Valider"):
-                            new_role = "admin" if is_admin else "membre"
-                            conn.execute("UPDATE users SET role=?, pages_par_semaine_fixe=?, date_cible=? WHERE id=?", (new_role, n_rate, str(n_d_cible), u[0]))
+                        c1, c2, c3 = st.columns(3)
+                        n_hizb_adm = c1.number_input("Hizb Cible", 0, 60, u[6], key=f"hizb_{u[0]}")
+                        n_rate = c2.number_input("Rythme (p/sem)", value=u[8] or 0.0)
+                        n_date = c3.date_input("Date Cible", value=datetime.strptime(u[7], '%Y-%m-%d').date() if u[7] else date.today())
+                        if st.form_submit_button("Sauvegarder"):
+                            conn.execute("UPDATE users SET role=?, obj_hizb=?, pages_par_semaine_fixe=?, date_cible=? WHERE id=?", ("admin" if is_admin else "membre", n_hizb_adm, n_rate, str(n_date), u[0]))
                             conn.commit(); st.rerun()
                     if st.button(f"🗑️ Supprimer {u[1]}", key=f"del_{u[0]}", type="primary"):
                         conn.execute("DELETE FROM users WHERE id=?", (u[0],)); conn.commit(); st.rerun()
-
     conn.close()
