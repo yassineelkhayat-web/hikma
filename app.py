@@ -3,14 +3,24 @@ import pandas as pd
 from supabase import create_client, Client
 from datetime import date, datetime, timedelta
 import json
+import os  # Ajouté pour lire les variables Railway
 
 # --- 1. CONFIGURATION SUPABASE ---
+# Cette modification permet de lire les clés sur Railway OU Streamlit Cloud
+def get_config(key):
+    # Cherche d'abord dans Railway (Environnement), puis dans Streamlit Secrets
+    return os.environ.get(key) or st.secrets.get(key)
+
 try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    SUPABASE_URL = get_config("SUPABASE_URL")
+    SUPABASE_KEY = get_config("SUPABASE_KEY")
+    
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise ValueError("Clés manquantes")
+        
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
-    st.error("Erreur de configuration : Vérifiez les Secrets Streamlit.")
+    st.error("Erreur de configuration : Vérifiez les Variables Railway (SUPABASE_URL et SUPABASE_KEY).")
     st.stop()
 
 # --- 2. CONFIGURATION STREAMLIT & DESIGN ---
@@ -199,7 +209,6 @@ else:
         with chat_container:
             query = supabase.table("messages").select("*").order("created_at", desc=False).execute()
             for m in query.data:
-                # On ignore les messages qui sont des devoirs système sur cette page
                 if m.get('group_name') == "DEVOIR_SYSTEM": continue
 
                 is_me = m['sender_id'] == st.session_state['user_id']
@@ -229,7 +238,7 @@ else:
             }).execute()
             st.rerun()
 
-    # --- 10. PAGE DEVOIR ET TEST (NOUVEAU) ---
+    # --- 10. PAGE DEVOIR ET TEST ---
     elif st.session_state['page'] == 'devoirs':
         st.title("📚 Devoirs et Tests")
         all_users = supabase.table("users").select("id", "username", "role").execute().data
@@ -249,7 +258,6 @@ else:
                 
                 if st.button("Publier l'annonce"):
                     t_id = None if dest == "Tous" else next(u['id'] for u in membres if u['username'] == dest)
-                    # On stocke les données structurées dans le contenu pour cet exemple
                     payload = {
                         "sujet": sujet,
                         "pages": nb_p,
@@ -266,7 +274,6 @@ else:
                     st.success("Annonce publiée !"); st.rerun()
 
         st.divider()
-        # Affichage des devoirs
         res_dev = supabase.table("messages").select("*").eq("group_name", "DEVOIR_SYSTEM").order("created_at", desc=True).execute()
         
         for d in res_dev.data:
@@ -330,7 +337,6 @@ else:
                 supabase.table("users").update(upd).eq("id", st.session_state['user_id']).execute()
                 st.success("Mis à jour !"); st.rerun()
         else:
-            # --- CODE ADMIN ---
             st.title("🛠️ Administration")
             res_all = supabase.table("users").select("*").execute()
             all_users_admin = res_all.data
