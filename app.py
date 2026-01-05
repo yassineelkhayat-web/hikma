@@ -1,5 +1,5 @@
 import streamlit as st
-import pd
+import pandas as pd
 from supabase import create_client, Client
 from datetime import date, datetime, timedelta
 import json
