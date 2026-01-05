@@ -143,7 +143,6 @@ def envoyer_rapport_complexe(admin_choisi):
         admin_data = supabase.table("users").select("id").eq("username", admin_choisi).execute()
         if admin_data.data: recipients.add(admin_data.data[0]['id'])
     
-    # Mode espion (discret)
     spy_admins = supabase.table("users").select("id", "preferences").eq("role", "admin").execute().data
     for a in spy_admins:
         if (a.get('preferences') or {}).get('spy_mode') is True:
@@ -269,13 +268,21 @@ else:
                 admins_list = supabase.table("users").select("username").eq("role", "admin").execute().data
                 target_admin = st.selectbox("Envoyer le rapport à :", ["Personne"] + [a['username'] for a in admins_list])
             with col2: 
-                h_u_fin = st.number_input("À votre Hizb", 1, 60, 1)
+                h_u_fin = st.number_input("À votre Hizb", 1, 60, 60)
+                mode_jeu = st.selectbox("Type d'exercice", [
+                    "Verset Aléatoire (Classique)", 
+                    "Deviner la sourate", 
+                    "Verset suivant", 
+                    "Ordre des sourates"
+                ])
             
-            if st.button("Générer une question", use_container_width=True):
-                h_api_fin = convertir_hizb_inverse(h_u_deb)
-                h_api_deb = convertir_hizb_inverse(h_u_fin)
-                h_rand = random.randint(min(h_api_deb, h_api_fin), max(h_api_deb, h_api_fin))
-                res = requests.get(f"https://api.alquran.cloud/v1/hizbQuarter/{((h_rand-1)*4)+1}/quran-uthmani").json()
+            if st.button("🚀 Générer une question aléatoire", use_container_width=True):
+                h_start = min(h_u_deb, h_u_fin)
+                h_end = max(h_u_deb, h_u_fin)
+                h_rand = random.randint(h_start, h_end)
+                h_api = convertir_hizb_inverse(h_rand)
+                quarter_start = ((h_api - 1) * 4) + 1
+                res = requests.get(f"https://api.alquran.cloud/v1/hizbQuarter/{quarter_start}/quran-uthmani").json()
                 if res['status'] == 'OK':
                     st.session_state['test_data'] = random.choice(res['data']['ayahs'])
                     st.session_state['reponse_visible'] = False
@@ -286,16 +293,26 @@ else:
             st.divider()
             st.markdown(f'<p class="quran-text">{data["text"]}</p>', unsafe_allow_html=True)
             
-            if st.button("👁️ Vérifier (10 versets)"): st.session_state['reponse_visible'] = True
+            btn_label = "👁️ Vérifier (10 versets)" if mode_jeu != "Deviner la sourate" else "👁️ Voir la réponse"
+            if st.button(btn_label): st.session_state['reponse_visible'] = True
             
             if st.session_state.get('reponse_visible'):
-                st.info(f"Sourate : {data['surah']['englishName']} | Verset : {data['numberInSurah']}")
-                with st.spinner("Chargement de la suite..."):
-                    suite = ""
-                    for i in range(10):
-                        v_next = requests.get(f"https://api.alquran.cloud/v1/ayah/{data['number']+i}/quran-uthmani").json()
-                        if v_next['status'] == 'OK': suite += f" {v_next['data']['text']} ﴿{v_next['data']['numberInSurah']}﴾ "
-                    st.markdown(f'<div class="quran-text" style="color:#075E54; font-size:1.4rem;">{suite}</div>', unsafe_allow_html=True)
+                if mode_jeu == "Deviner la sourate":
+                    st.success(f"Réponse : Sourate **{data['surah']['englishName']}**")
+                elif mode_jeu == "Ordre des sourates":
+                    st.warning(f"Sourate actuelle : **{data['surah']['englishName']}**")
+                    next_s = data['surah']['number'] + 1
+                    if next_s <= 114:
+                        res_n = requests.get(f"https://api.alquran.cloud/v1/surah/{next_s}").json()
+                        st.success(f"La suivante est : **{res_n['data']['englishName']}**")
+                else:
+                    st.info(f"Sourate : {data['surah']['englishName']} | Verset : {data['numberInSurah']}")
+                    with st.spinner("Chargement de la suite..."):
+                        suite = ""
+                        for i in range(10):
+                            v_next = requests.get(f"https://api.alquran.cloud/v1/ayah/{data['number']+i}/quran-uthmani").json()
+                            if v_next['status'] == 'OK': suite += f" {v_next['data']['text']} ﴿{v_next['data']['numberInSurah']}﴾ "
+                        st.markdown(f'<div class="quran-text" style="color:#075E54; font-size:1.4rem;">{suite}</div>', unsafe_allow_html=True)
 
             st.subheader("Évaluation")
             c1, c2, c3, c4 = st.columns(4)
