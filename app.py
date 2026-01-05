@@ -142,22 +142,20 @@ else:
 
     st.sidebar.divider()
     
-    # Bouton de score spécifique à la page de test
     if st.session_state['page'] == 'test_hifz':
         st.sidebar.subheader("📊 Score Session")
         st.sidebar.info(f"Correct : {st.session_state.score} / {st.session_state.total_questions}")
         if st.sidebar.button("📤 Envoyer Rapport"):
-            report_text = f"Résultat de {st.session_state['user']} : {st.session_state.score}/{st.session_state.total_questions}"
             payload = {
                 "sujet": "Rapport d'entraînement",
                 "pages": st.session_state.score,
                 "hizb": st.session_state.total_questions,
-                "text": f"L'utilisateur a testé ses connaissances en autonomie.",
+                "text": f"L'utilisateur {st.session_state['user']} a terminé sa session d'entraînement.",
                 "date": str(date.today())
             }
             supabase.table("messages").insert({
                 "sender_id": st.session_state['user_id'],
-                "receiver_id": None, # Visible par l'admin
+                "receiver_id": None, 
                 "group_name": "DEVOIR_SYSTEM",
                 "content": json.dumps(payload)
             }).execute()
@@ -197,7 +195,7 @@ else:
 
     # --- 10. PAGE DEVOIR ET TEST ---
     elif st.session_state['page'] == 'devoirs':
-        st.title("📚 Devoirs et Tests Officiels")
+        st.title("📚 Devoirs et Tests")
         res_dev = supabase.table("messages").select("*").eq("group_name", "DEVOIR_SYSTEM").order("created_at", desc=True).execute()
         for d in res_dev.data:
             if d['receiver_id'] is None or d['receiver_id'] == st.session_state['user_id'] or st.session_state['role'] == 'admin':
@@ -209,7 +207,7 @@ else:
                             supabase.table("messages").delete().eq("id", d['id']).execute(); st.rerun()
                 except: continue
 
-    # --- 11. PAGE VÉRIFIER TEST (HIFZ ENTRAÎNEMENT) ---
+    # --- 11. PAGE TEST (HIFZ ENTRAÎNEMENT) ---
     elif st.session_state['page'] == 'test_hifz':
         st.title("🎯 Entraînement au Test")
         with st.expander("⚙️ Paramètres (Hizb Inversés)", expanded=True):
@@ -236,12 +234,25 @@ else:
                 if st.button("Voir la réponse"): st.session_state['reponse_visible'] = True
                 if st.session_state.get('reponse_visible'):
                     st.success(f"Réponse : Sourate **{data['surah']['englishName']}**")
+
             elif mode == "Verset suivant":
-                if st.button("Voir les 15 versets suivants"): st.session_state['reponse_visible'] = True
+                if st.button("Voir les 10 versets suivants"): st.session_state['reponse_visible'] = True
                 if st.session_state.get('reponse_visible'):
-                    res_n = requests.get(f"https://api.alquran.cloud/v1/ayah/{data['number']+1}/15/quran-uthmani").json()
-                    if res_n['status'] == 'OK':
-                        for ay in res_n['data']: st.write(f"({ay['numberInSurah']}) {ay['text']}")
+                    # Correction de l'URL pour récupérer une plage de versets
+                    num_start = data['number'] + 1
+                    if num_start > 6236:
+                        st.warning("C'est le dernier verset du Coran.")
+                    else:
+                        # Utilisation de l'édition quran-uthmani pour le texte arabe
+                        res_n = requests.get(f"https://api.alquran.cloud/v1/ayah/{num_start}/editions/quran-uthmani").json()
+                        if res_n['status'] == 'OK':
+                            # On récupère les 10 versets suivants manuellement pour éviter les erreurs d'API
+                            for i in range(10):
+                                r = requests.get(f"https://api.alquran.cloud/v1/ayah/{num_start + i}/quran-uthmani").json()
+                                if r['status'] == 'OK':
+                                    st.write(f"({r['data']['numberInSurah']}) {r['data']['text']}")
+                                else: break
+
             elif mode == "Ordre des sourates":
                 if st.button("Sourate suivante ?"): st.session_state['reponse_visible'] = True
                 if st.session_state.get('reponse_visible'):
