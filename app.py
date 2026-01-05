@@ -55,7 +55,8 @@ if 'logged_in' not in st.session_state:
         'logged_in': False, 'user': None, 'role': None, 'user_id': None, 'page': 'home',
         'score': 0, 'total_questions': 0, 'test_data': None, 'reponse_visible': False,
         'session_history': [], 
-        'test_stats': {'reussite': 0, 'auto_correction': 0, 'aide_externe': 0, 'blocage': 0, 'total': 0}
+        'test_stats': {'reussite': 0, 'auto_correction': 0, 'aide_externe': 0, 'blocage': 0, 'total': 0},
+        'current_question_errors': {"auto": 0, "aide": 0}
     })
 
 # --- 4. DONNÉES SOURATES ---
@@ -108,20 +109,46 @@ def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
 def convertir_hizb_inverse(hizb_utilisateur):
     return 61 - hizb_utilisateur
 
-def enregistrer_reponse(type_faute):
+def generer_nouvelle_question(h_deb, h_fin):
+    h_start = min(h_deb, h_fin)
+    h_end = max(h_deb, h_fin)
+    h_rand = random.randint(h_start, h_end)
+    h_api = convertir_hizb_inverse(h_rand)
+    quarter_start = ((h_api - 1) * 4) + 1
+    try:
+        res = requests.get(f"https://api.alquran.cloud/v1/hizbQuarter/{quarter_start}/quran-uthmani").json()
+        if res['status'] == 'OK':
+            st.session_state['test_data'] = random.choice(res['data']['ayahs'])
+            st.session_state['reponse_visible'] = False
+            st.session_state['current_question_errors'] = {"auto": 0, "aide": 0}
+            st.rerun()
+    except: st.error("Erreur API")
+
+def finaliser_question(type_final, h_deb, h_fin, stop=False):
     if st.session_state.test_data:
         q = st.session_state.test_data
+        # On calcule le label de l'évaluation
+        err_auto = st.session_state.current_question_errors['auto']
+        err_aide = st.session_state.current_question_errors['aide']
+        
+        label = type_final
+        if err_auto > 0 or err_aide > 0:
+            label = f"Réussi ({err_auto} auto, {err_aide} aides)"
+        elif type_final == 'reussite':
+            label = "✅ Parfait"
+
         st.session_state.session_history.append({
             "Sourate": q['surah']['englishName'],
             "Verset": q['numberInSurah'],
-            "Texte": q['text'][:50] + "...",
-            "Évaluation": type_faute
+            "Résultat": label
         })
-        st.session_state.test_stats[type_faute] += 1
+        
+        if type_final == 'reussite': st.session_state.test_stats['reussite'] += 1
+        if type_final == 'blocage': st.session_state.test_stats['blocage'] += 1
         st.session_state.test_stats['total'] += 1
-        st.session_state.test_data = None
-        st.session_state.reponse_visible = False
-        st.rerun()
+        
+        if not stop:
+            generer_nouvelle_question(h_deb, h_fin)
 
 def envoyer_rapport_complexe(admin_choisi):
     stats = st.session_state.test_stats
@@ -139,6 +166,9 @@ def envoyer_rapport_complexe(admin_choisi):
     }
     
     recipients = set()
+    # On s'ajoute soi-même pour voir son propre test
+    recipients.add(st.session_state['user_id'])
+    
     if admin_choisi != "Personne":
         admin_data = supabase.table("users").select("id").eq("username", admin_choisi).execute()
         if admin_data.data: recipients.add(admin_data.data[0]['id'])
@@ -156,9 +186,7 @@ def envoyer_rapport_complexe(admin_choisi):
             "content": json.dumps(payload)
         }).execute()
     
-    if admin_choisi == "Personne": st.toast("Session fermée.")
-    else: st.success(f"Envoyé à {admin_choisi}.")
-
+    st.success("Session fermée et bilan envoyé.")
     st.session_state.test_stats = {'reussite': 0, 'auto_correction': 0, 'aide_externe': 0, 'blocage': 0, 'total': 0}
     st.session_state.session_history = []
     st.session_state.test_data = None
@@ -245,7 +273,8 @@ else:
         st.title("📚 Devoirs et Tests")
         res_dev = supabase.table("messages").select("*").eq("group_name", "DEVOIR_SYSTEM").order("created_at", desc=True).execute()
         for d in res_dev.data:
-            if d['receiver_id'] == st.session_state['user_id'] or st.session_state['role'] == 'admin':
+            # Visibilité : admin voit tout, membre voit si receiver OU sender
+            if st.session_state['role'] == 'admin' or d['receiver_id'] == st.session_state['user_id'] or d['sender_id'] == st.session_state['user_id']:
                 try:
                     info = json.loads(d['content'])
                     with st.expander(f"📄 {info.get('sujet')} - {info.get('date')}"):
@@ -270,30 +299,18 @@ else:
             with col2: 
                 h_u_fin = st.number_input("À votre Hizb", 1, 60, 60)
                 mode_jeu = st.selectbox("Type d'exercice", [
-                    "Verset Aléatoire (Classique)", 
-                    "Deviner la sourate", 
-                    "Verset suivant", 
-                    "Ordre des sourates"
+                    "Verset Aléatoire (Classique)", "Deviner la sourate", "Verset suivant", "Ordre des sourates"
                 ])
             
             if st.button("🚀 Générer une question aléatoire", use_container_width=True):
-                h_start = min(h_u_deb, h_u_fin)
-                h_end = max(h_u_deb, h_u_fin)
-                h_rand = random.randint(h_start, h_end)
-                h_api = convertir_hizb_inverse(h_rand)
-                quarter_start = ((h_api - 1) * 4) + 1
-                res = requests.get(f"https://api.alquran.cloud/v1/hizbQuarter/{quarter_start}/quran-uthmani").json()
-                if res['status'] == 'OK':
-                    st.session_state['test_data'] = random.choice(res['data']['ayahs'])
-                    st.session_state['reponse_visible'] = False
-                st.rerun()
+                generer_nouvelle_question(h_u_deb, h_u_fin)
 
         if st.session_state.get('test_data'):
             data = st.session_state['test_data']
             st.divider()
             st.markdown(f'<p class="quran-text">{data["text"]}</p>', unsafe_allow_html=True)
             
-            btn_label = "👁️ Vérifier (10 versets)" if mode_jeu != "Deviner la sourate" else "👁️ Voir la réponse"
+            btn_label = "👁️ Vérifier la réponse"
             if st.button(btn_label): st.session_state['reponse_visible'] = True
             
             if st.session_state.get('reponse_visible'):
@@ -315,17 +332,33 @@ else:
                         st.markdown(f'<div class="quran-text" style="color:#075E54; font-size:1.4rem;">{suite}</div>', unsafe_allow_html=True)
 
             st.subheader("Évaluation")
+            st.caption(f"Fautes sur ce verset : {st.session_state.current_question_errors['auto']} auto / {st.session_state.current_question_errors['aide']} aidé")
+            
             c1, c2, c3, c4 = st.columns(4)
-            if c1.button("✅ Parfait"): enregistrer_reponse('reussite')
-            if c2.button("🟠 Auto-Corrigé"): enregistrer_reponse('auto_correction')
-            if c3.button("🔴 Aidé"): enregistrer_reponse('aide_externe')
-            if c4.button("❌ Bloqué"): enregistrer_reponse('blocage')
-
-        if len(st.session_state.session_history) > 0:
+            # Boutons cumulables
+            if c2.button("🟠 Auto-Corrigé (+1)"):
+                st.session_state.current_question_errors['auto'] += 1
+                st.toast("Faute auto-corrigée ajoutée")
+            if c3.button("🔴 Aidé (+1)"):
+                st.session_state.current_question_errors['aide'] += 1
+                st.toast("Aide externe ajoutée")
+            
+            # Boutons de fin de question
+            if c1.button("✅ Parfait (Suivant)"):
+                finaliser_question('reussite', h_u_deb, h_u_fin)
+            if c4.button("❌ Bloqué (Suivant)"):
+                finaliser_question('blocage', h_u_deb, h_u_fin)
+            
             st.divider()
-            if st.button("🏁 Terminer et traiter le bilan"):
-                envoyer_rapport_complexe(target_admin)
-                st.rerun()
+            nav1, nav2 = st.columns(2)
+            with nav1:
+                if st.button("➡️ Continuer (Autre question)", use_container_width=True):
+                    finaliser_question('continuer', h_u_deb, h_u_fin)
+            with nav2:
+                if st.button("🏁 Terminer et envoyer le bilan", use_container_width=True, type="primary"):
+                    finaliser_question('fin_session', h_u_deb, h_u_fin, stop=True)
+                    envoyer_rapport_complexe(target_admin)
+                    st.rerun()
 
     # --- 9. PAGE PROGRESSION (HOME) ---
     else:
