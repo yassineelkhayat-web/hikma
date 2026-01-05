@@ -3,21 +3,19 @@ import pandas as pd
 from supabase import create_client, Client
 from datetime import date, datetime, timedelta
 import json
-import os  # Ajouté pour lire les variables Railway
+import os
+import requests
+import random
 
 # --- 1. CONFIGURATION SUPABASE ---
-# Cette modification permet de lire les clés sur Railway OU Streamlit Cloud
 def get_config(key):
-    # Cherche d'abord dans Railway (Environnement), puis dans Streamlit Secrets
     return os.environ.get(key) or st.secrets.get(key)
 
 try:
     SUPABASE_URL = get_config("SUPABASE_URL")
     SUPABASE_KEY = get_config("SUPABASE_KEY")
-    
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise ValueError("Clés manquantes")
-        
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     st.error("Erreur de configuration : Vérifiez les Variables Railway (SUPABASE_URL et SUPABASE_KEY).")
@@ -28,32 +26,23 @@ st.set_page_config(page_title="HIKMA", layout="wide")
 
 st.markdown("""
     <style>
-    header[data-testid="stHeader"] {
-        background-color: #075E54 !important;
-    }
+    header[data-testid="stHeader"] { background-color: #075E54 !important; }
     .chat-header-custom {
-        background-color: #075E54;
-        color: white;
-        padding: 12px;
-        border-radius: 10px 10px 0 0;
-        margin-bottom: 10px;
+        background-color: #075E54; color: white; padding: 12px;
+        border-radius: 10px 10px 0 0; margin-bottom: 10px;
     }
-    /* Bulles de messages plus fines */
     [data-testid="stChatMessage"] {
-        border-radius: 12px !important;
-        padding: 5px 12px !important;
-        margin-bottom: 5px !important;
-        max-width: 75% !important;
-        font-size: 0.9rem !important;
+        border-radius: 12px !important; padding: 5px 12px !important;
+        margin-bottom: 5px !important; max-width: 75% !important; font-size: 0.9rem !important;
     }
-    /* Style pour les cartes de devoirs */
     .devoir-card {
-        border-left: 5px solid #075E54;
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 15px;
+        border-left: 5px solid #075E54; background-color: #ffffff;
+        padding: 15px; border-radius: 8px; margin-bottom: 15px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .quran-text {
+        font-size: 1.5rem !important; line-height: 2.5rem;
+        text-align: right; direction: rtl; font-family: 'Amiri', serif;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -61,11 +50,7 @@ st.markdown("""
 # --- 3. INITIALISATION DES ÉTATS ---
 if 'logged_in' not in st.session_state:
     st.session_state.update({
-        'logged_in': False, 
-        'user': None, 
-        'role': None, 
-        'user_id': None,
-        'page': 'home' 
+        'logged_in': False, 'user': None, 'role': None, 'user_id': None, 'page': 'home' 
     })
 
 # --- 4. DONNÉES SOURATES ---
@@ -103,10 +88,8 @@ DATA_CORAN = {
 
 # --- 5. FONCTIONS UTILES ---
 def calculer_metrics(p_actuelle, h_cible, rythme_f, d_cible_str):
-    try:
-        d_cible = datetime.strptime(d_cible_str, '%Y-%m-%d').date()
-    except:
-        d_cible = date.today()
+    try: d_cible = datetime.strptime(d_cible_str, '%Y-%m-%d').date()
+    except: d_cible = date.today()
     p_cible = 604 - (int(h_cible) * 10)
     p_restantes = max(0, int(p_actuelle) - p_cible)
     j_restants = max(0, (d_cible - date.today()).days)
@@ -143,36 +126,28 @@ else:
     st.sidebar.title(f"👤 {st.session_state['user']}")
     
     if st.sidebar.button("🏠 Ma Progression", use_container_width=True):
-        st.session_state['page'] = 'home'
-        st.rerun()
-
+        st.session_state['page'] = 'home'; st.rerun()
     if st.sidebar.button("💬 Discussion", use_container_width=True):
-        st.session_state['page'] = 'chat'
-        st.rerun()
-
+        st.session_state['page'] = 'chat'; st.rerun()
     if st.sidebar.button("📚 Devoir et Test", use_container_width=True):
-        st.session_state['page'] = 'devoirs'
-        st.rerun()
+        st.session_state['page'] = 'devoirs'; st.rerun()
+    if st.sidebar.button("🎯 Vérifier Test", use_container_width=True):
+        st.session_state['page'] = 'test_hifz'; st.rerun()
 
     st.sidebar.divider()
     
-    # --- GESTION DES CONTACTS DANS LA SIDEBAR (Chat seulement) ---
     if st.session_state['page'] == 'chat':
         st.sidebar.subheader("📇 Mes Contacts")
         all_users = supabase.table("users").select("id", "username", "role").execute().data
-        
         if st.session_state['role'] == 'admin':
             with st.sidebar.expander("➕ Créer un Groupe"):
                 g_name = st.text_input("Nom du groupe")
                 g_members = st.multiselect("Membres", [u['username'] for u in all_users if u['username'] != st.session_state['user']])
-                if st.button("Créer"):
-                    st.success(f"Groupe '{g_name}' créé !")
-        
+                if st.button("Créer"): st.success(f"Groupe '{g_name}' créé !")
         contact_list = ["Groupe Global"] + [u['username'] for u in all_users if u['username'] != st.session_state['user']]
         selected_chat = st.sidebar.radio("Discuter avec :", contact_list)
         st.session_state['selected_chat'] = selected_chat
 
-    # --- ADMINISTRATION TRADITIONNELLE ---
     if st.session_state['role'] == 'admin':
         with st.sidebar.expander("⚙️ Paramètres Admin"):
             membres_data = supabase.table("users").select("username").eq("role", "membre").execute().data
@@ -184,58 +159,35 @@ else:
                     st.success("Fait !"); st.rerun()
 
     if st.sidebar.button("Déconnexion", use_container_width=True): 
-        st.session_state.clear()
-        st.rerun()
+        st.session_state.clear(); st.rerun()
 
-    # --- 8. PAGE DISCUSSION (INTERFACE WHATSAPP) ---
+    # --- 8. PAGE DISCUSSION ---
     if st.session_state['page'] == 'chat':
         all_users = supabase.table("users").select("id", "username", "role").execute().data
         target_label = st.session_state.get('selected_chat', 'Groupe Global')
-        
-        st.markdown(f"""
-            <div class="chat-header-custom">
-                <strong>👤 {target_label}</strong><br>
-                <small>{'Discussion de groupe' if target_label == 'Groupe Global' else 'Message privé'}</small>
-            </div>
-            """, unsafe_allow_html=True)
-
+        st.markdown(f'<div class="chat-header-custom"><strong>👤 {target_label}</strong><br><small>Message</small></div>', unsafe_allow_html=True)
         group_tag = "GROUPE_MEMBRES" if target_label == "Groupe Global" else None
-        target_id = None
-        if not group_tag:
-            target_user = next((u for u in all_users if u['username'] == target_label), None)
-            target_id = target_user['id'] if target_user else None
-
+        target_id = next((u['id'] for u in all_users if u['username'] == target_label), None) if not group_tag else None
         chat_container = st.container(height=500)
         with chat_container:
             query = supabase.table("messages").select("*").order("created_at", desc=False).execute()
             for m in query.data:
                 if m.get('group_name') == "DEVOIR_SYSTEM": continue
-
                 is_me = m['sender_id'] == st.session_state['user_id']
                 sender_name = next((u['username'] for u in all_users if u['id'] == m['sender_id']), "Inconnu")
-                
                 show = False
-                if group_tag and m['group_name'] == group_tag:
-                    show = True
+                if group_tag and m['group_name'] == group_tag: show = True
                 elif not group_tag and m['group_name'] is None:
                     if (m['sender_id'] == st.session_state['user_id'] and m['receiver_id'] == target_id) or \
-                       (m['sender_id'] == target_id and m['receiver_id'] == st.session_state['user_id']):
-                        show = True
-                
+                       (m['sender_id'] == target_id and m['receiver_id'] == st.session_state['user_id']): show = True
                 if show:
                     with st.chat_message("user" if is_me else "assistant"):
                         if not is_me: st.markdown(f"**{sender_name}**")
                         st.write(m['content'])
                         st.caption(f"{m['created_at'][11:16]} {'✓✓' if is_me else ''}")
-
         prompt = st.chat_input(f"Envoyer à {target_label}...")
         if prompt:
-            supabase.table("messages").insert({
-                "sender_id": st.session_state['user_id'],
-                "receiver_id": target_id,
-                "group_name": group_tag,
-                "content": prompt
-            }).execute()
+            supabase.table("messages").insert({"sender_id": st.session_state['user_id'], "receiver_id": target_id, "group_name": group_tag, "content": prompt}).execute()
             st.rerun()
 
     # --- 10. PAGE DEVOIR ET TEST ---
@@ -243,95 +195,96 @@ else:
         st.title("📚 Devoirs et Tests")
         all_users = supabase.table("users").select("id", "username", "role").execute().data
         membres = [u for u in all_users if u['role'] == 'membre']
-
         if st.session_state['role'] == 'admin':
             with st.expander("🆕 Assigner un Devoir/Test", expanded=True):
                 dest = st.selectbox("Pour qui ?", ["Tous"] + [u['username'] for u in membres])
-                sujet = st.text_input("Sujet du test / devoir")
+                sujet = st.text_input("Sujet")
                 c1, c2 = st.columns(2)
-                with c1:
-                    nb_p = st.number_input("Nombre de pages", 0, 604, 10)
-                with c2:
-                    nb_h = st.number_input("Nombre de Hizb", 0, 60, 1)
-                
-                instructions = st.text_area("Précisions (ex: Portera sur les 10 premières pages de Al-Baqara)")
-                
-                if st.button("Publier l'annonce"):
+                with c1: nb_p = st.number_input("Pages", 0, 604, 10)
+                with c2: nb_h = st.number_input("Hizb", 0, 60, 1)
+                instructions = st.text_area("Précisions")
+                if st.button("Publier"):
                     t_id = None if dest == "Tous" else next(u['id'] for u in membres if u['username'] == dest)
-                    payload = {
-                        "sujet": sujet,
-                        "pages": nb_p,
-                        "hizb": nb_h,
-                        "text": instructions,
-                        "date": str(date.today())
-                    }
-                    supabase.table("messages").insert({
-                        "sender_id": st.session_state['user_id'],
-                        "receiver_id": t_id,
-                        "group_name": "DEVOIR_SYSTEM",
-                        "content": json.dumps(payload)
-                    }).execute()
-                    st.success("Annonce publiée !"); st.rerun()
-
+                    payload = {"sujet": sujet, "pages": nb_p, "hizb": nb_h, "text": instructions, "date": str(date.today())}
+                    supabase.table("messages").insert({"sender_id": st.session_state['user_id'], "receiver_id": t_id, "group_name": "DEVOIR_SYSTEM", "content": json.dumps(payload)}).execute()
+                    st.success("Publié !"); st.rerun()
         st.divider()
         res_dev = supabase.table("messages").select("*").eq("group_name", "DEVOIR_SYSTEM").order("created_at", desc=True).execute()
-        
         for d in res_dev.data:
             if d['receiver_id'] is None or d['receiver_id'] == st.session_state['user_id'] or st.session_state['role'] == 'admin':
                 try:
                     info = json.loads(d['content'])
-                    with st.container():
-                        st.markdown(f"""
-                        <div class="devoir-card">
-                            <h4>📝 {info['sujet']}</h4>
-                            <p><b>Cible :</b> {info['pages']} pages | {info['hizb']} Hizb</p>
-                            <p><i>{info['text']}</i></p>
-                            <small>Publié le {info['date']}</small>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        if st.session_state['role'] == 'admin':
-                            if st.button("Supprimer", key=f"del_dev_{d['id']}"):
-                                supabase.table("messages").delete().eq("id", d['id']).execute()
-                                st.rerun()
+                    st.markdown(f'<div class="devoir-card"><h4>📝 {info["sujet"]}</h4><p><b>Cible :</b> {info["pages"]} pages | {info["hizb"]} Hizb</p><p><i>{info["text"]}</i></p></div>', unsafe_allow_html=True)
+                    if st.session_state['role'] == 'admin':
+                        if st.button("Supprimer", key=f"del_{d['id']}"):
+                            supabase.table("messages").delete().eq("id", d['id']).execute(); st.rerun()
                 except: continue
+
+    # --- 11. PAGE VÉRIFIER TEST (NOUVEAU) ---
+    elif st.session_state['page'] == 'test_hifz':
+        st.title("🎯 Entraînement & Vérification")
+        with st.expander("⚙️ Paramètres du Test", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1: h_deb = st.number_input("Hizb début", 1, 60, 1)
+            with col2: h_fin = st.number_input("Hizb fin", 1, 60, 2)
+            mode = st.selectbox("Mode", ["Deviner la sourate", "Verset suivant", "Ordre des sourates"])
+            if st.button("Générer une question", use_container_width=True):
+                # Approximation simple des plages de versets pour l'exemple
+                random_ayah = random.randint(1, 6236)
+                res = requests.get(f"https://api.alquran.cloud/v1/ayah/{random_ayah}/editions/quran-uthmani").json()
+                if res['status'] == 'OK':
+                    st.session_state['test_data'] = res['data'][0]
+                    st.session_state['reponse_visible'] = False
+        if 'test_data' in st.session_state:
+            data = st.session_state['test_data']
+            st.divider()
+            if mode == "Deviner la sourate":
+                st.markdown(f'<p class="quran-text">{data["text"]}</p>', unsafe_allow_html=True)
+                if st.button("Voir la réponse"): st.session_state['reponse_visible'] = True
+                if st.session_state.get('reponse_visible'):
+                    st.success(f"Réponse : Sourate **{data['surah']['englishName']}**")
+            elif mode == "Verset suivant":
+                st.markdown(f'<p class="quran-text">{data["text"]}</p>', unsafe_allow_html=True)
+                if st.button("Voir les 15 versets suivants"): st.session_state['reponse_visible'] = True
+                if st.session_state.get('reponse_visible'):
+                    res_n = requests.get(f"https://api.alquran.cloud/v1/ayah/{data['number']+1}/15/quran-uthmani").json()
+                    if res_n['status'] == 'OK':
+                        for ay in res_n['data']: st.write(f"({ay['numberInSurah']}) {ay['text']}")
+            elif mode == "Ordre des sourates":
+                s_num = data['surah']['number']
+                res_s = requests.get(f"https://api.alquran.cloud/v1/surah/{s_num}/quran-uthmani").json()
+                last_txt = res_s['data']['ayahs'][-1]['text']
+                st.info("Dernier verset de la sourate :")
+                st.markdown(f'<p class="quran-text">{last_txt}</p>', unsafe_allow_html=True)
+                if st.button("Sourate suivante ?"): st.session_state['reponse_visible'] = True
+                if st.session_state.get('reponse_visible'):
+                    if s_num < 114:
+                        res_next = requests.get(f"https://api.alquran.cloud/v1/surah/{s_num+1}").json()
+                        st.success(f"Suivante : **{res_next['data']['englishName']}**")
+                    else: st.warning("C'est la fin du Coran !")
 
     # --- 9. PAGE PROGRESSION (HOME) ---
     else:
         if st.session_state['role'] != 'admin':
             u_data = supabase.table("users").select("*").eq("id", st.session_state['user_id']).execute().data[0]
             p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(u_data['page_actuelle'], u_data['obj_hizb'], u_data['rythme_fixe'], u_data['date_cible'])
-            
             st.title("🚀 Ma Progression")
             c1, c2, c3 = st.columns(3)
-            c1.metric("Pages restantes", p_rest)
-            if float(u_data['rythme_fixe']) > 0:
-                c2.metric("Fin estimée", str(d_est))
-                c3.metric("Rythme", f"{u_data['rythme_fixe']} p/s")
-            else:
-                c2.metric("Jours restants", j_rest)
-                c3.metric("Conseillé", f"{r_auto} p/s")
-
-            total_pages_objectif = 604 - p_cib
-            perc = min(100, max(0, int(((total_pages_objectif - p_rest) / total_pages_objectif) * 100))) if total_pages_objectif > 0 else 100
-            st.progress(perc / 100)
-            st.write(f"**{perc}%** atteint")
-
+            c1.metric("Pages restantes", p_rest); c2.metric("Fin estimée", str(d_est)); c3.metric("Rythme", f"{u_data['rythme_fixe']} p/s")
+            st.progress(min(100, max(0, int(((604-p_cib-p_rest)/(604-p_cib))*100)))/100 if (604-p_cib)>0 else 1.0)
             st.divider()
             colA, colB = st.columns(2)
             with colA:
-                st.subheader("🎯 Objectifs")
                 n_hizb = st.number_input("Hizb visé", 0, 60, int(u_data['obj_hizb']))
                 n_date = st.date_input("Date cible", d_cib)
                 n_rythme = st.number_input("Pages/semaine", 0.0, 100.0, float(u_data['rythme_fixe']))
             with colB:
-                st.subheader("📖 Mon étude")
                 s_list = list(DATA_CORAN.keys())
                 curr_s = u_data.get('sourate') or "An-Nas"
                 n_s = st.selectbox("Dernière sourate", s_list, index=s_list.index(curr_s))
                 p_deb, p_fin = DATA_CORAN[n_s]
                 p_dans_s = st.number_input(f"Page dans {n_s}", 1, (p_fin-p_deb+1), 1)
                 n_p_reelle = p_fin - (p_dans_s - 1)
-
             if st.button("💾 Sauvegarder", use_container_width=True):
                 upd = {"page_actuelle": n_p_reelle, "sourate": n_s, "obj_hizb": n_hizb, "date_cible": str(n_date), "rythme_fixe": n_rythme}
                 supabase.table("users").update(upd).eq("id", st.session_state['user_id']).execute()
@@ -339,28 +292,15 @@ else:
         else:
             st.title("🛠️ Administration")
             res_all = supabase.table("users").select("*").execute()
-            all_users_admin = res_all.data
-            if all_users_admin:
-                df_all = pd.DataFrame(all_users_admin)
-                st.subheader("🚨 Données Maître")
-                edited_master = st.data_editor(df_all, hide_index=True, use_container_width=True, disabled=["id"])
+            if res_all.data:
+                df_all = pd.DataFrame(res_all.data)
+                edited = st.data_editor(df_all, hide_index=True, use_container_width=True, disabled=["id"])
                 if st.button("🔥 SAUVEGARDER"):
-                    for _, row in edited_master.iterrows():
+                    for _, row in edited.iterrows():
                         payload = row.to_dict(); uid = payload.pop('id')
                         supabase.table("users").update(payload).eq("id", uid).execute()
                     st.success("Base à jour !"); st.rerun()
-
-                st.divider()
-                st.subheader("🔍 Focus par membre")
-                users_focus = [u for u in all_users_admin if u['username'] != 'admin']
-                for user in users_focus:
-                    with st.expander(f"👤 {user['username'].upper()}"):
-                        p_rest, j_rest, r_auto, d_est, d_cib, p_cib = calculer_metrics(user['page_actuelle'], user['obj_hizb'], user['rythme_fixe'], user['date_cible'])
-                        st.write(f"Reste : {p_rest} pages | Idéal : {r_auto} p/sem")
-
-                st.divider()
                 st.subheader("🗑️ Supprimer un membre")
-                u_to_del = st.selectbox("Choisir", [u['username'] for u in users_focus], key="del_box")
+                u_to_del = st.selectbox("Choisir", [u['username'] for u in res_all.data if u['username']!='admin'])
                 if st.button("SUPPRIMER DÉFINITIVEMENT", type="primary"):
-                    supabase.table("users").delete().eq("username", u_to_del).execute()
-                    st.rerun()
+                    supabase.table("users").delete().eq("username", u_to_del).execute(); st.rerun()
