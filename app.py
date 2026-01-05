@@ -127,7 +127,6 @@ def generer_nouvelle_question(h_deb, h_fin):
 def finaliser_question(type_final, h_deb, h_fin, stop=False):
     if st.session_state.test_data:
         q = st.session_state.test_data
-        # On calcule le label de l'évaluation
         err_auto = st.session_state.current_question_errors['auto']
         err_aide = st.session_state.current_question_errors['aide']
         
@@ -150,15 +149,19 @@ def finaliser_question(type_final, h_deb, h_fin, stop=False):
         if not stop:
             generer_nouvelle_question(h_deb, h_fin)
 
-def envoyer_rapport_complexe(admin_choisi):
+def envoyer_rapport_complexe(admin_choisi, eleve_concerne=None):
     stats = st.session_state.test_stats
     history = st.session_state.session_history
+    
+    nom_sujet = eleve_concerne if eleve_concerne and eleve_concerne != "Auto-test" else st.session_state['user']
+    
     bilan_details = (
-        f"📊 Bilan de {st.session_state['user']}\n"
-        f"- Total : {stats['total']} | Succès : {stats['reussite']}"
+        f"📊 Bilan de {nom_sujet}\n"
+        f"- Total : {stats['total']} | Succès : {stats['reussite']}\n"
+        f"- Évaluateur : {st.session_state['user']}"
     )
     payload = {
-        "sujet": f"Test de {st.session_state['user']}", 
+        "sujet": f"Test de {nom_sujet}", 
         "stats": stats, 
         "details": history,
         "text": bilan_details, 
@@ -166,9 +169,12 @@ def envoyer_rapport_complexe(admin_choisi):
     }
     
     recipients = set()
-    # On s'ajoute soi-même pour voir son propre test
-    recipients.add(st.session_state['user_id'])
+    recipients.add(st.session_state['user_id']) # L'expéditeur reçoit
     
+    if eleve_concerne and eleve_concerne != "Auto-test":
+        res_e = supabase.table("users").select("id").eq("username", eleve_concerne).execute()
+        if res_e.data: recipients.add(res_e.data[0]['id']) # L'élève reçoit
+
     if admin_choisi != "Personne":
         admin_data = supabase.table("users").select("id").eq("username", admin_choisi).execute()
         if admin_data.data: recipients.add(admin_data.data[0]['id'])
@@ -186,7 +192,7 @@ def envoyer_rapport_complexe(admin_choisi):
             "content": json.dumps(payload)
         }).execute()
     
-    st.success("Session fermée et bilan envoyé.")
+    st.success("Session fermée et bilan envoyé aux concernés.")
     st.session_state.test_stats = {'reussite': 0, 'auto_correction': 0, 'aide_externe': 0, 'blocage': 0, 'total': 0}
     st.session_state.session_history = []
     st.session_state.test_data = None
@@ -271,9 +277,38 @@ else:
     # --- 10. PAGE DEVOIR ET TEST ---
     elif st.session_state['page'] == 'devoirs':
         st.title("📚 Devoirs et Tests")
+        
+        if st.session_state['role'] == 'admin':
+            with st.expander("📝 Programmer un Devoir ou Test", expanded=False):
+                with st.form("form_devoir"):
+                    col_d1, col_d2 = st.columns(2)
+                    users_list = supabase.table("users").select("username").execute().data
+                    with col_d1:
+                        type_envoi = st.selectbox("Type", ["Devoir", "Test", "Rappel"])
+                        sujet_input = st.text_input("Sujet (ex: Sourate Al-Baqara)")
+                        cible_user = st.selectbox("Assigner à", ["Tous les membres"] + [u['username'] for u in users_list if u['username'] != st.session_state['user']])
+                    with col_d2:
+                        quantite = st.number_input("Nombre", 1, 60, 1)
+                        unite = st.radio("Unité", ["Pages", "Hizbs"], horizontal=True)
+                    
+                    consigne = st.text_area("Consignes")
+                    if st.form_submit_button("Envoyer l'assignation"):
+                        bilan_assign = f"📍 {type_envoi} : {sujet_input}\n📏 Quantité : {quantite} {unite}\n💬 {consigne}"
+                        payload_dev = {"sujet": f"NOUVEAU : {type_envoi}", "text": bilan_assign, "date": str(date.today())}
+                        
+                        target_ids = []
+                        if cible_user == "Tous les membres":
+                            target_ids = [u['id'] for u in users_list]
+                        else:
+                            u_target = supabase.table("users").select("id").eq("username", cible_user).execute().data
+                            if u_target: target_ids = [u_target[0]['id']]
+                            
+                        for t_id in target_ids:
+                            supabase.table("messages").insert({"sender_id": st.session_state['user_id'], "receiver_id": t_id, "group_name": "DEVOIR_SYSTEM", "content": json.dumps(payload_dev)}).execute()
+                        st.success("Assignation envoyée !")
+
         res_dev = supabase.table("messages").select("*").eq("group_name", "DEVOIR_SYSTEM").order("created_at", desc=True).execute()
         for d in res_dev.data:
-            # Visibilité : admin voit tout, membre voit si receiver OU sender
             if st.session_state['role'] == 'admin' or d['receiver_id'] == st.session_state['user_id'] or d['sender_id'] == st.session_state['user_id']:
                 try:
                     info = json.loads(d['content'])
@@ -292,10 +327,12 @@ else:
         st.title("🎯 Test de Mémorisation")
         with st.expander("⚙️ Configuration", expanded=True):
             col1, col2 = st.columns(2)
+            users_list_test = supabase.table("users").select("username", "role").execute().data
             with col1: 
                 h_u_deb = st.number_input("De votre Hizb", 1, 60, 1)
-                admins_list = supabase.table("users").select("username").eq("role", "admin").execute().data
-                target_admin = st.selectbox("Envoyer le rapport à :", ["Personne"] + [a['username'] for a in admins_list])
+                admins_list = [u['username'] for u in users_list_test if u['role'] == 'admin']
+                target_admin = st.selectbox("Envoyer le rapport à :", ["Personne"] + admins_list)
+                eleve_teste = st.selectbox("Qui passe le test ?", ["Auto-test"] + [u['username'] for u in users_list_test if u['username'] != st.session_state['user']])
             with col2: 
                 h_u_fin = st.number_input("À votre Hizb", 1, 60, 60)
                 mode_jeu = st.selectbox("Type d'exercice", [
@@ -335,7 +372,6 @@ else:
             st.caption(f"Fautes sur ce verset : {st.session_state.current_question_errors['auto']} auto / {st.session_state.current_question_errors['aide']} aidé")
             
             c1, c2, c3, c4 = st.columns(4)
-            # Boutons cumulables
             if c2.button("🟠 Auto-Corrigé (+1)"):
                 st.session_state.current_question_errors['auto'] += 1
                 st.toast("Faute auto-corrigée ajoutée")
@@ -343,7 +379,6 @@ else:
                 st.session_state.current_question_errors['aide'] += 1
                 st.toast("Aide externe ajoutée")
             
-            # Boutons de fin de question
             if c1.button("✅ Parfait (Suivant)"):
                 finaliser_question('reussite', h_u_deb, h_u_fin)
             if c4.button("❌ Bloqué (Suivant)"):
@@ -357,7 +392,7 @@ else:
             with nav2:
                 if st.button("🏁 Terminer et envoyer le bilan", use_container_width=True, type="primary"):
                     finaliser_question('fin_session', h_u_deb, h_u_fin, stop=True)
-                    envoyer_rapport_complexe(target_admin)
+                    envoyer_rapport_complexe(target_admin, eleve_teste)
                     st.rerun()
 
     # --- 9. PAGE PROGRESSION (HOME) ---
