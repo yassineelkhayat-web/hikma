@@ -212,11 +212,9 @@ else:
                 st.success("Config sauvegardée.")
     if st.sidebar.button("Déconnexion", use_container_width=True): st.session_state.clear(); st.rerun()
 
-    # --- 8. PAGE DISCUSSION (MODIFIÉ) ---
+    # --- 8. PAGE DISCUSSION ---
     if st.session_state['page'] == 'chat':
         all_users = supabase.table("users").select("id", "username", "role").execute().data
-        
-        # SÉLECTION DU DESTINATAIRE : Choix entre Global ou un membre spécifique
         chat_options = ["Groupe Global"] + [u['username'] for u in all_users if u['id'] != st.session_state['user_id']]
         target_label = st.selectbox("💬 Discuter avec :", chat_options, key="chat_target_select")
         
@@ -233,21 +231,16 @@ else:
                 is_me = m['sender_id'] == st.session_state['user_id']
                 sender_name = next((u['username'] for u in all_users if u['id'] == m['sender_id']), "Inconnu")
                 show = False
-                
-                # Filtrage : Messages globaux OU conversation privée spécifique
                 if group_tag and m['group_name'] == group_tag: 
                     show = True
                 elif not group_tag and m['group_name'] is None:
-                    # On affiche seulement si c'est entre moi et la personne sélectionnée
                     if (m['sender_id'] == st.session_state['user_id'] and m['receiver_id'] == target_id) or \
                        (m['sender_id'] == target_id and m['receiver_id'] == st.session_state['user_id']): 
                         show = True
-                
                 if show:
                     with st.chat_message("user" if is_me else "assistant"):
                         if not is_me: st.markdown(f"**{sender_name}**")
                         st.write(m['content'])
-        
         prompt = st.chat_input(f"Envoyer à {target_label}...")
         if prompt:
             supabase.table("messages").insert({"sender_id": st.session_state['user_id'], "receiver_id": target_id, "group_name": group_tag, "content": prompt}).execute()
@@ -287,7 +280,7 @@ else:
                             if st.button("Supprimer", key=f"del_{d['id']}"): supabase.table("messages").delete().eq("id", d['id']).execute(); st.rerun()
                 except: continue
 
-    # --- 11. PAGE TEST (MODIFIÉ) ---
+    # --- 11. PAGE TEST ---
     elif st.session_state['page'] == 'test_hifz':
         st.title("🎯 Test de Mémorisation")
         with st.expander("⚙️ Configuration", expanded=True):
@@ -297,35 +290,49 @@ else:
                 h_u_deb = st.number_input("De votre Hizb", 1, 60, 1)
                 admins_list = [u['username'] for u in users_list_test if u['role'] == 'admin']
                 target_admin = st.selectbox("Envoyer le rapport à :", ["Personne"] + admins_list)
-                
-                # --- LOGIQUE DE RESTRICTION ---
                 if st.session_state['role'] == 'admin':
                     eleve_teste = st.selectbox("Qui passe le test ?", ["Auto-test"] + [u['username'] for u in users_list_test if u['username'] != st.session_state['user']])
                 else:
                     eleve_teste = st.session_state['user']
                     st.info(f"Test configuré sur votre propre compte : **{eleve_teste}**")
-                    
             with col2: 
                 h_u_fin = st.number_input("À votre Hizb", 1, 60, 60)
                 mode_jeu = st.selectbox("Type d'exercice", ["Verset Aléatoire (Classique)", "Deviner la sourate", "Verset suivant", "Ordre des sourates"])
             if st.button("🚀 Générer une question aléatoire", use_container_width=True): generer_nouvelle_question(h_u_deb, h_u_fin)
+        
         if st.session_state.get('test_data'):
             data = st.session_state['test_data']
             st.divider()
             st.markdown(f'<p class="quran-text">{data["text"]}</p>', unsafe_allow_html=True)
+            
+            # --- BLOC VÉRIFICATION ROBUSTE ---
             if st.button("👁️ Vérifier la réponse"): st.session_state['reponse_visible'] = True
             if st.session_state.get('reponse_visible'):
-                if mode_jeu == "Deviner la sourate": st.success(f"Réponse : Sourate **{data['surah']['englishName']}**")
+                if mode_jeu == "Deviner la sourate":
+                    st.success(f"Réponse : Sourate **{data['surah']['englishName']}**")
                 elif mode_jeu == "Ordre des sourates":
+                    st.warning(f"Sourate actuelle : **{data['surah']['englishName']}**")
                     next_s = data['surah']['number'] + 1
                     if next_s <= 114:
-                        res_n = requests.get(f"https://api.alquran.cloud/v1/surah/{next_s}").json()
-                        st.success(f"La suivante est : **{res_n['data']['englishName']}**")
+                        try:
+                            res_n = requests.get(f"https://api.alquran.cloud/v1/surah/{next_s}", timeout=5).json()
+                            st.success(f"La suivante est : **{res_n['data']['englishName']}**")
+                        except: st.error("Erreur API sourate suivante.")
                 else:
                     st.info(f"Sourate : {data['surah']['englishName']} | Verset : {data['numberInSurah']}")
-                    with st.spinner("Suite..."):
-                        suite = "".join([f" {requests.get(f'https://api.alquran.cloud/v1/ayah/{data['number']+i}/quran-uthmani').json()['data']['text']} ﴿{requests.get(f'https://api.alquran.cloud/v1/ayah/{data['number']+i}/quran-uthmani').json()['data']['numberInSurah']}﴾ " for i in range(10)])
-                        st.markdown(f'<div class="quran-text" style="color:#075E54; font-size:1.4rem;">{suite}</div>', unsafe_allow_html=True)
+                    with st.spinner("Chargement de la suite..."):
+                        suite = ""
+                        for i in range(1, 8):
+                            try:
+                                v_next_id = data['number'] + i
+                                if v_next_id <= 6236:
+                                    v_res = requests.get(f"https://api.alquran.cloud/v1/ayah/{v_next_id}/quran-uthmani", timeout=3).json()
+                                    if v_res['status'] == 'OK':
+                                        suite += f" {v_res['data']['text']} ﴿{v_res['data']['numberInSurah']}﴾ "
+                            except: continue
+                        if suite: st.markdown(f'<div class="quran-text" style="color:#075E54; font-size:1.4rem;">{suite}</div>', unsafe_allow_html=True)
+                        else: st.warning("API saturée. Réessayez dans un instant.")
+
             st.subheader("Évaluation")
             c1, c2, c3, c4 = st.columns(4)
             if c2.button("🟠 Auto-Corrigé (+1)"): st.session_state.current_question_errors['auto'] += 1; st.toast("Faute auto-corrigée")
