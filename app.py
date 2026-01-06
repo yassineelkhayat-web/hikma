@@ -56,7 +56,8 @@ if 'logged_in' not in st.session_state:
         'score': 0, 'total_questions': 0, 'test_data': None, 'reponse_visible': False,
         'session_history': [], 
         'test_stats': {'reussite': 0, 'auto_correction': 0, 'aide_externe': 0, 'blocage': 0, 'total': 0},
-        'current_question_errors': {"auto": 0, "aide": 0}
+        'current_question_errors': {"auto": 0, "aide": 0},
+        'current_test_range': ""
     })
 
 # --- 4. DONNÉES SOURATES ---
@@ -110,19 +111,26 @@ def convertir_hizb_inverse(hizb_utilisateur):
     return 61 - hizb_utilisateur
 
 def generer_nouvelle_question(h_deb, h_fin):
-    h_start = min(h_deb, h_fin)
-    h_end = max(h_deb, h_fin)
-    h_rand = random.randint(h_start, h_end)
-    h_api = convertir_hizb_inverse(h_rand)
-    quarter_start = ((h_api - 1) * 4) + 1
+    h_min = min(h_deb, h_fin)
+    h_max = max(h_deb, h_fin)
+    
+    # On calcule la plage de quarters (1 Hizb = 4 quarters dans cette logique d'API)
+    q_start = ((convertir_hizb_inverse(h_min) - 1) * 4) + 1
+    q_end = (convertir_hizb_inverse(h_max) * 4)
+    
+    all_quarters = list(range(min(q_start, q_end), max(q_start, q_end) + 1))
+    q_rand = random.choice(all_quarters)
+    
     try:
-        res = requests.get(f"https://api.alquran.cloud/v1/hizbQuarter/{quarter_start}/quran-uthmani").json()
+        res = requests.get(f"https://api.alquran.cloud/v1/hizbQuarter/{q_rand}/quran-uthmani", timeout=5).json()
         if res['status'] == 'OK':
             st.session_state['test_data'] = random.choice(res['data']['ayahs'])
             st.session_state['reponse_visible'] = False
             st.session_state['current_question_errors'] = {"auto": 0, "aide": 0}
+            st.session_state['current_test_range'] = f"Hizb {h_min} à {h_max}"
             st.rerun()
-    except: st.error("Erreur API")
+    except:
+        st.error("L'API est occupée, réessayez de générer.")
 
 def finaliser_question(type_final, h_deb, h_fin, stop=False):
     if st.session_state.test_data:
@@ -152,9 +160,28 @@ def finaliser_question(type_final, h_deb, h_fin, stop=False):
 def envoyer_rapport_complexe(admin_choisi, eleve_concerne=None):
     stats = st.session_state.test_stats
     history = st.session_state.session_history
+    tranche = st.session_state.get('current_test_range', 'Non précisée')
     nom_sujet = eleve_concerne if eleve_concerne and eleve_concerne != "Auto-test" else st.session_state['user']
-    bilan_details = f"📊 Bilan de {nom_sujet}\n- Total : {stats['total']} | Succès : {stats['reussite']}\n- Évaluateur : {st.session_state['user']}"
-    payload = {"sujet": f"Test de {nom_sujet}", "stats": stats, "details": history, "text": bilan_details, "date": str(date.today())}
+    
+    bilan_details = (
+        f"📊 **BILAN DE TEST**\n"
+        f"👤 **Candidat :** {nom_sujet}\n"
+        f"🎯 **Sujet du test :** {tranche}\n"
+        f"--- \n"
+        f"✅ Réussites : {stats['reussite']}\n"
+        f"❌ Blocages : {stats['blocage']}\n"
+        f"📈 Total questions : {stats['total']}\n"
+        f"👨‍🏫 Évaluateur : {st.session_state['user']}"
+    )
+    
+    payload = {
+        "sujet": f"Résultat Test : {nom_sujet} ({tranche})", 
+        "stats": stats, 
+        "details": history, 
+        "text": bilan_details, 
+        "date": str(date.today())
+    }
+    
     recipients = {st.session_state['user_id']}
     if eleve_concerne and eleve_concerne != "Auto-test":
         res_e = supabase.table("users").select("id").eq("username", eleve_concerne).execute()
@@ -162,12 +189,20 @@ def envoyer_rapport_complexe(admin_choisi, eleve_concerne=None):
     if admin_choisi != "Personne":
         admin_data = supabase.table("users").select("id").eq("username", admin_choisi).execute()
         if admin_data.data: recipients.add(admin_data.data[0]['id'])
+    
     spy_admins = supabase.table("users").select("id", "preferences").eq("role", "admin").execute().data
     for a in spy_admins:
         if (a.get('preferences') or {}).get('spy_mode') is True: recipients.add(a['id'])
+        
     for r_id in recipients:
-        supabase.table("messages").insert({"sender_id": st.session_state['user_id'], "receiver_id": r_id, "group_name": "DEVOIR_SYSTEM", "content": json.dumps(payload)}).execute()
-    st.success("Session fermée et bilan envoyé.")
+        supabase.table("messages").insert({
+            "sender_id": st.session_state['user_id'], 
+            "receiver_id": r_id, 
+            "group_name": "DEVOIR_SYSTEM", 
+            "content": json.dumps(payload)
+        }).execute()
+        
+    st.success("Session terminée. Le rapport a été envoyé.")
     st.session_state.test_stats = {'reussite': 0, 'auto_correction': 0, 'aide_externe': 0, 'blocage': 0, 'total': 0}
     st.session_state.session_history = []
     st.session_state.test_data = None
